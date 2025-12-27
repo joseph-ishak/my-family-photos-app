@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-
+import heic2any from "heic2any";
 type Props = {
   open: boolean;
   onClose: () => void;
@@ -25,17 +25,39 @@ export default function PhotoUploadModal({
   const isCreatingNew = selectedEvent === "__new__";
   const eventId = isCreatingNew ? newEvent : selectedEvent;
 
+  async function normalizeImage(file: File): Promise<File> {
+    if (
+      file.type === "image/heic" ||
+      file.type === "image/heif" ||
+      file.name.toLowerCase().endsWith(".heic")
+    ) {
+      const convertedBlob = await heic2any({
+        blob: file,
+        toType: "image/jpeg",
+        quality: 0.9,
+      });
+
+      return new File(
+        [convertedBlob as Blob],
+        file.name.replace(/\.heic$/i, ".jpg"),
+        { type: "image/jpeg" }
+      );
+    }
+
+    return file;
+  }
   const handleUpload = async () => {
     if (!files.length || !user || !eventId) return;
     setUploading(true);
     try {
       for (const file of files) {
+        const normalizedFile = await normalizeImage(file);
         const res = await fetch("/api/upload-url", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            filename: file.name,
-            filetype: file.type,
+            filename: normalizedFile.name,
+            filetype: normalizedFile.type,
             userId: user.sub,
             eventId,
           }),
@@ -45,8 +67,8 @@ export default function PhotoUploadModal({
 
         const uploadRes = await fetch(signedUrl, {
           method: "PUT",
-          headers: { "Content-Type": file.type },
-          body: file,
+          headers: { "Content-Type": normalizedFile.type },
+          body: normalizedFile,
         });
 
         if (!uploadRes.ok) throw new Error("Upload failed");
