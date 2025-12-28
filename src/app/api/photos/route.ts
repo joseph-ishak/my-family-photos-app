@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
         ScanIndexForward: false,
         ExclusiveStartKey,
         ProjectionExpression:
-          "PK, SK, s3Key, eventId, takenAt, ownerUserId, mimeType",
+          "PK, SK, s3Key, eventId, takenAt, ownerUserId, mimeType, mediaType",
       })
     );
 
@@ -80,10 +80,18 @@ export async function GET(req: NextRequest) {
           { expiresIn: 3600 }
         );
 
+        const inferredMediaType =
+          item.mediaType ??
+          (typeof item.mimeType === "string" &&
+          item.mimeType.startsWith("video/")
+            ? "video"
+            : "photo");
+
         return {
           key: item.s3Key,
           s3Key: item.s3Key,
           mimeType: item.mimeType,
+          mediaType: inferredMediaType,
           url,
           eventId: item.eventId,
           takenAt: item.takenAt,

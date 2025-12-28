@@ -12,15 +12,36 @@ const ddb = DynamoDBDocumentClient.from(
   new DynamoDBClient({ region: "us-west-2" })
 );
 
+function isValidMediaType(value: unknown): value is "photo" | "video" {
+  return value === "photo" || value === "video";
+}
+
 export async function POST(req: NextRequest) {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { filename, filetype, eventId, takenAt } = await req.json();
+  const body = await req.json();
 
-  const photoId = uuidv4();
+  const filename = body?.filename;
+  const filetype = body?.filetype;
+  const eventId = body?.eventId;
+  const takenAt = body?.takenAt;
+
+  const mediaTypeRaw = body?.mediaType;
+  const mediaType: "photo" | "video" = isValidMediaType(mediaTypeRaw)
+    ? mediaTypeRaw
+    : "photo";
+
+  if (!filename || !filetype) {
+    return NextResponse.json(
+      { error: "filename and filetype are required" },
+      { status: 400 }
+    );
+  }
+
+  const mediaId = uuidv4();
   const uploadedAt = new Date().toISOString();
 
   const safeName = String(filename ?? "upload")
@@ -28,7 +49,9 @@ export async function POST(req: NextRequest) {
     .slice(0, 200);
 
   const eventName = String(eventId ?? "default").trim() || "default";
-  const s3Key = `uploads/${photoId}_${safeName}`;
+
+  const prefix = mediaType === "video" ? "videos" : "photos";
+  const s3Key = `${prefix}/${mediaId}_${safeName}`;
 
   const command = new PutObjectCommand({
     Bucket: process.env.S3_BUCKET_NAME!,
@@ -38,7 +61,9 @@ export async function POST(req: NextRequest) {
 
   const signedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
 
-  const sk = `PHOTO#${takenAt ?? uploadedAt}#${photoId}`;
+  const timePart = takenAt ?? uploadedAt;
+
+  const sk = `MEDIA#${timePart}#${mediaId}`;
 
   await ddb.send(
     new PutCommand({
@@ -50,14 +75,16 @@ export async function POST(req: NextRequest) {
         GSI1PK: "PHOTO",
         GSI1SK: sk,
 
-        photoId,
+        mediaId,
+        mediaType,
         eventId: eventName,
         ownerUserId: user.sub,
-        takenAt: takenAt ?? uploadedAt,
+        takenAt: timePart,
         uploadedAt,
         s3Bucket: process.env.S3_BUCKET_NAME,
         s3Key,
         mimeType: filetype,
+        filename: safeName,
       },
     })
   );
@@ -74,5 +101,5 @@ export async function POST(req: NextRequest) {
     })
   );
 
-  return NextResponse.json({ signedUrl, s3Key });
+  return NextResponse.json({ signedUrl, s3Key, mediaType, sk });
 }

@@ -15,6 +15,14 @@ type Job = {
   file: File;
 };
 
+function isVideoFile(file: File) {
+  return file.type.startsWith("video/");
+}
+
+function isImageFile(file: File) {
+  return file.type.startsWith("image/");
+}
+
 export default function PhotoUploadModal({
   open,
   onClose,
@@ -68,11 +76,20 @@ export default function PhotoUploadModal({
     return file;
   }
 
+  async function preprocessFile(file: File): Promise<File> {
+    if (isImageFile(file)) {
+      return normalizeImage(file);
+    }
+    return file;
+  }
+
   async function uploadOneFile(
     file: File,
     eventIdValue: string,
     userId: string
   ) {
+    const mediaType = isVideoFile(file) ? "video" : "photo";
+
     const res = await fetch("/api/upload-url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -81,6 +98,7 @@ export default function PhotoUploadModal({
         filetype: file.type,
         userId,
         eventId: eventIdValue,
+        mediaType,
       }),
     });
 
@@ -148,13 +166,13 @@ export default function PhotoUploadModal({
     setStatusText("Preparing files");
 
     try {
-      const normalizedFiles: File[] = [];
+      const processedFiles: File[] = [];
       for (const f of files) {
-        const nf = await normalizeImage(f);
-        normalizedFiles.push(nf);
+        const pf = await preprocessFile(f);
+        processedFiles.push(pf);
       }
 
-      const jobs: Job[] = normalizedFiles.map((file, index) => ({
+      const jobs: Job[] = processedFiles.map((file, index) => ({
         file,
         index,
       }));
@@ -203,6 +221,18 @@ export default function PhotoUploadModal({
     !eventId ||
     (isCreatingNew && !newEvent.trim());
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files || []);
+
+    const supported = picked.filter((f) => isImageFile(f) || isVideoFile(f));
+
+    setFiles(supported);
+
+    if (picked.length !== supported.length) {
+      alert("Some files were skipped because they are not supported.");
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
       <div className="bg-white rounded-2xl shadow-xl p-8 min-w-[360px] max-w-[560px] w-[92vw] flex flex-col">
@@ -213,8 +243,8 @@ export default function PhotoUploadModal({
           <input
             type="file"
             multiple
-            accept="image/*"
-            onChange={(e) => setFiles(Array.from(e.target.files || []))}
+            accept="image/*,video/*"
+            onChange={handleFileChange}
             className="mt-2"
             disabled={uploading}
           />
@@ -257,7 +287,7 @@ export default function PhotoUploadModal({
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-gray-900">
-                  Uploading photos
+                  Uploading files
                 </div>
                 <div className="mt-1 text-xs text-gray-500">
                   {files.length

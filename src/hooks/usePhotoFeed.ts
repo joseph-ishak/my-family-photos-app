@@ -14,6 +14,9 @@ export type Photo = {
   sk?: string;
   s3Key?: string;
   mimeType?: string;
+
+  mediaType?: "photo" | "video";
+  thumbnailUrl?: string;
 };
 
 type ApiPhotosResponse = {
@@ -24,6 +27,11 @@ type ApiPhotosResponse = {
 type Args = {
   pageSize?: number;
 };
+
+function isVideo(p: Photo) {
+  if (p.mediaType) return p.mediaType === "video";
+  return (p.mimeType ?? "").startsWith("video/");
+}
 
 export function usePhotosFeed({ pageSize = 20 }: Args) {
   const [existingEvents, setExistingEvents] = useState<string[]>([]);
@@ -256,6 +264,10 @@ export function usePhotosFeed({ pageSize = 20 }: Args) {
 
   const saveEditedPhoto = useCallback(
     async (photo: Photo, blob: Blob) => {
+      if (isVideo(photo)) {
+        alert("Video editing is not supported yet.");
+        return;
+      }
       const pk = photo.pk;
       const sk = photo.sk;
       const s3Key = photo.s3Key || photo.key;
