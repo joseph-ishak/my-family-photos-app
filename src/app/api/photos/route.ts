@@ -4,13 +4,14 @@ import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   DynamoDBDocumentClient,
   QueryCommand,
-  GetCommand,
-  DeleteCommand,
+  BatchGetCommand,
+  TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
   S3Client,
   GetObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getVerifiedUser } from "@/lib/auth-server";
@@ -20,10 +21,25 @@ const ddb = DynamoDBDocumentClient.from(
 );
 const s3 = new S3Client({ region: "us-west-2" });
 
+type DeleteItem = {
+  pk: string;
+  sk: string;
+  key?: string;
+};
+
+const MAX_ITEMS = 200;
+
+function chunk<T>(arr: T[], size: number) {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 export async function GET(req: NextRequest) {
   const user = await getVerifiedUser(req);
-  if (!user?.sub)
+  if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const { searchParams } = new URL(req.url);
   const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 50);
@@ -39,7 +55,11 @@ export async function GET(req: NextRequest) {
         TableName: process.env.DYNAMO_TABLE_NAME!,
         IndexName: "GSI1",
         KeyConditionExpression: "GSI1PK = :pk",
-        ExpressionAttributeValues: { ":pk": "PHOTO" },
+        FilterExpression: "ownerUserId = :u",
+        ExpressionAttributeValues: {
+          ":pk": "PHOTO",
+          ":u": user.sub,
+        },
         Limit: limit,
         ScanIndexForward: false,
         ExclusiveStartKey,
@@ -85,48 +105,132 @@ export async function GET(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   const user = await getVerifiedUser(req);
-  if (!user?.sub)
+  if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { searchParams } = new URL(req.url);
-  const key = searchParams.get("key");
-  const pk = searchParams.get("pk");
-  const sk = searchParams.get("sk");
-
-  if (!key || !pk || !sk) {
-    return NextResponse.json({ error: "Missing key pk sk" }, { status: 400 });
   }
 
-  const itemRes = await ddb.send(
-    new GetCommand({
-      TableName: process.env.DYNAMO_TABLE_NAME!,
-      Key: { PK: pk, SK: sk },
-      ProjectionExpression: "ownerUserId, s3Key",
-    })
-  );
+  try {
+    const { searchParams } = new URL(req.url);
 
-  const item: any = itemRes.Item;
-  if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    let items: DeleteItem[] = [];
 
-  if (item.ownerUserId !== user.sub) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    const body = await req.json().catch(() => null);
+    const bodyItems = (body?.items ?? []) as DeleteItem[];
+
+    if (Array.isArray(bodyItems) && bodyItems.length > 0) {
+      items = bodyItems;
+    } else {
+      const key = searchParams.get("key");
+      const pk = searchParams.get("pk");
+      const sk = searchParams.get("sk");
+
+      if (pk && sk) {
+        items = [{ pk, sk, key: key ?? undefined }];
+      }
+    }
+
+    console.log("DELETE /api/photos received", {
+      userSub: user.sub,
+      itemsCount: items.length,
+      sample: items[0],
+    });
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return NextResponse.json({ error: "No items provided" }, { status: 400 });
+    }
+
+    if (items.length > MAX_ITEMS) {
+      return NextResponse.json(
+        { error: `Too many items. Max ${MAX_ITEMS}` },
+        { status: 400 }
+      );
+    }
+
+    const table = process.env.DYNAMO_TABLE_NAME!;
+    const keys = items.map((i) => ({ PK: i.pk, SK: i.sk }));
+
+    const keyChunks = chunk(keys, 100);
+
+    const foundAll: any[] = [];
+    for (const kc of keyChunks) {
+      const got = await ddb.send(
+        new BatchGetCommand({
+          RequestItems: {
+            [table]: {
+              Keys: kc,
+              ProjectionExpression: "PK, SK, ownerUserId, s3Key",
+            },
+          },
+        })
+      );
+
+      const found = got.Responses?.[table] ?? [];
+      foundAll.push(...found);
+    }
+
+    console.log("DELETE /api/photos batchGet found", {
+      foundCount: foundAll.length,
+    });
+
+    const deletable = foundAll.filter((x: any) => x.ownerUserId === user.sub);
+
+    if (deletable.length === 0) {
+      return NextResponse.json(
+        { error: "Nothing deletable for this user" },
+        { status: 403 }
+      );
+    }
+
+    const txChunks = chunk(deletable, 25);
+    for (const c of txChunks) {
+      await ddb.send(
+        new TransactWriteCommand({
+          TransactItems: c.map((d: any) => ({
+            Delete: {
+              TableName: table,
+              Key: { PK: d.PK, SK: d.SK },
+              ConditionExpression: "ownerUserId = :u",
+              ExpressionAttributeValues: { ":u": user.sub },
+            },
+          })),
+        })
+      );
+    }
+
+    const s3Keys = deletable
+      .map((d: any) => d.s3Key)
+      .filter(Boolean)
+      .map((k: string) => ({ Key: k }));
+
+    if (s3Keys.length === 1) {
+      await s3.send(
+        new DeleteObjectCommand({
+          Bucket: process.env.S3_BUCKET_NAME!,
+          Key: s3Keys[0].Key!,
+        })
+      );
+    } else if (s3Keys.length > 1) {
+      const s3Chunks = chunk(s3Keys, 1000);
+      for (const sc of s3Chunks) {
+        await s3.send(
+          new DeleteObjectsCommand({
+            Bucket: process.env.S3_BUCKET_NAME!,
+            Delete: { Objects: sc, Quiet: true },
+          })
+        );
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      deletedCount: deletable.length,
+      requestedCount: items.length,
+    });
+  } catch (err: any) {
+    console.error("DELETE /api/photos error", err);
+    return NextResponse.json(
+      { error: err?.message || "Delete failed" },
+      { status: 500 }
+    );
   }
-
-  await ddb.send(
-    new DeleteCommand({
-      TableName: process.env.DYNAMO_TABLE_NAME!,
-      Key: { PK: pk, SK: sk },
-      ConditionExpression: "ownerUserId = :u",
-      ExpressionAttributeValues: { ":u": user.sub },
-    })
-  );
-
-  await s3.send(
-    new DeleteObjectCommand({
-      Bucket: process.env.S3_BUCKET_NAME!,
-      Key: item.s3Key || key,
-    })
-  );
-
-  return NextResponse.json({ success: true });
 }

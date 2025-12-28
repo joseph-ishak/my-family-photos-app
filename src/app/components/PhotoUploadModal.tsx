@@ -1,5 +1,6 @@
+"use client";
+
 import React, { useState } from "react";
-import heic2any from "heic2any";
 
 type Props = {
   open: boolean;
@@ -43,11 +44,14 @@ export default function PhotoUploadModal({
   if (!open) return null;
 
   async function normalizeImage(file: File): Promise<File> {
-    if (
-      file.type === "image/heic" ||
-      file.type === "image/heif" ||
-      file.name.toLowerCase().endsWith(".heic")
-    ) {
+    const isHeicByType =
+      file.type === "image/heic" || file.type === "image/heif";
+    const isHeicByName = file.name.toLowerCase().endsWith(".heic");
+
+    if (isHeicByType || isHeicByName) {
+      const mod = await import("heic2any");
+      const heic2any = (mod as any).default || mod;
+
       const convertedBlob = await heic2any({
         blob: file,
         toType: "image/jpeg",

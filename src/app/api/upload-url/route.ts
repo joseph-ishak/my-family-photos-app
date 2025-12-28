@@ -14,8 +14,9 @@ const ddb = DynamoDBDocumentClient.from(
 
 export async function POST(req: NextRequest) {
   const user = await getVerifiedUser(req);
-  if (!user?.sub)
+  if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const { filename, filetype, eventId, takenAt } = await req.json();
 
@@ -26,7 +27,7 @@ export async function POST(req: NextRequest) {
     .replace(/[^a-zA-Z0-9._]/g, "_")
     .slice(0, 200);
 
-  const eventName = (eventId ?? "default").trim() || "default";
+  const eventName = String(eventId ?? "default").trim() || "default";
   const s3Key = `uploads/${photoId}_${safeName}`;
 
   const command = new PutObjectCommand({

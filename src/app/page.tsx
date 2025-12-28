@@ -2,19 +2,37 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getCurrentUser } from "../lib/auth";
 
-export default function HomePage() {
+export default function RootPage() {
   const router = useRouter();
 
   useEffect(() => {
-    async function checkAuth() {
-      const user = await getCurrentUser();
-      if (!user) router.replace("/login?redirect=/family-photos");
-      else router.replace("/family-photos");
+    let cancelled = false;
+
+    async function run() {
+      try {
+        const res = await fetch("/api/auth/me", {
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        const data = await res.json().catch(() => null);
+        const user = data?.user ?? null;
+
+        if (cancelled) return;
+
+        router.replace(user ? "/home" : "/login");
+      } catch {
+        if (!cancelled) router.replace("/login");
+      }
     }
-    checkAuth();
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
-  return <p>Loading...</p>;
+  return <p className="p-8 text-center">Loading...</p>;
 }

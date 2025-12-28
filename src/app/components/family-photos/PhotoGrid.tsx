@@ -9,7 +9,7 @@ type Props = {
   selectedKeys: string[];
   onSelectChange: (key: string, checked: boolean) => void;
   onOpen: (photo: Photo) => void;
-  onDelete: (key: string) => void;
+  onDelete: (key: string) => void | Promise<void>;
 };
 
 export default function PhotoGrid({
@@ -34,8 +34,11 @@ export default function PhotoGrid({
             isSelected={isSelected}
             onToggleSelect={(checked) => onSelectChange(photo.key, checked)}
             onOpen={() => onOpen(photo)}
-            onDelete={() => onDelete(photo.key)}
-            onUpdate={() => alert("Update/Crop not implemented yet")}
+            onDelete={async () => {
+              console.log("PhotoCard onDelete fired for", photo.key);
+              await onDelete(photo.key);
+            }}
+            onUpdate={() => alert("Update or crop not implemented yet")}
           />
         );
       })}

@@ -19,7 +19,6 @@ export default function FamilyPhotosPage() {
   const {
     existingEvents = [],
 
-    // ✅ defensive defaults so .length never crashes even if hook returns undefined during refactor
     selectedKeys = [],
     setSelectedKeys,
 
@@ -84,14 +83,16 @@ export default function FamilyPhotosPage() {
         userSub={user?.sub}
         selectedKeys={selectedKeys}
         onSelectChange={(key, checked) => {
-          // ✅ if setSelectedKeys isn't provided for some reason, don't crash
           if (!setSelectedKeys) return;
           setSelectedKeys((prev: string[] = []) =>
             checked ? [...prev, key] : prev.filter((k) => k !== key)
           );
         }}
         onOpen={setExpandedPhoto}
-        onDelete={(key) => deletePhoto(key)}
+        onDelete={(key) => {
+          console.log("FamilyPhotosPage onDelete received key", key);
+          deletePhoto(key);
+        }}
       />
 
       <div ref={loaderRef} className="h-10" />
