@@ -1,5 +1,5 @@
-// src/app/layout.tsx
 import Navbar from "./components/Navbar";
+import { ProfileProvider } from "./components/ProfileProvider";
 import "./globals.css";
 
 export default function RootLayout({
@@ -10,8 +10,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-gray-50">
-        <Navbar />
-        {children}
+        <ProfileProvider>
+          <Navbar />
+          {children}
+        </ProfileProvider>
       </body>
     </html>
   );

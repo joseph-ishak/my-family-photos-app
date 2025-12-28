@@ -2,21 +2,28 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useProfile, initials } from "./ProfileProvider";
 
 export default function Navbar() {
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
 
+  const { loading, profile, isAuthed, clear } = useProfile();
+
   const handleLogout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    });
+    clear();
+    router.replace("/login");
   };
 
   return (
     <nav className="bg-blue-600 text-white shadow-md">
       <div className="max-w-6xl mx-auto px-4">
         <div className="flex justify-between items-center h-16">
-          {/* Logo / Brand */}
+          {/* Brand */}
           <div
             className="flex-shrink-0 text-2xl font-bold cursor-pointer"
             onClick={() => router.push("/home")}
@@ -24,7 +31,7 @@ export default function Navbar() {
             Family Photos
           </div>
 
-          {/* Desktop Links */}
+          {/* Desktop */}
           <div className="hidden md:flex space-x-6 items-center">
             <button
               onClick={() => router.push("/home")}
@@ -32,19 +39,70 @@ export default function Navbar() {
             >
               Home
             </button>
+
             <button
               onClick={() => router.push("/family-photos")}
               className="hover:text-gray-200"
             >
               Gallery
             </button>
-            <button onClick={handleLogout} className="hover:text-gray-200">
-              Logout
-            </button>
+
+            {isAuthed && (
+              <>
+                <button
+                  onClick={() => router.push("/settings")}
+                  className="hover:text-gray-200"
+                >
+                  Settings
+                </button>
+
+                <button onClick={handleLogout} className="hover:text-gray-200">
+                  Logout
+                </button>
+
+                <button
+                  onClick={() => router.push("/settings")}
+                  className="w-9 h-9 rounded-full bg-white/20 overflow-hidden flex items-center justify-center border border-white/30"
+                  aria-label="Open settings"
+                >
+                  {!loading && profile?.avatarUrl ? (
+                    <img
+                      src={profile.avatarUrl}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-xs font-semibold">
+                      {initials(profile?.nickname || "User")}
+                    </span>
+                  )}
+                </button>
+              </>
+            )}
           </div>
 
-          {/* Mobile Hamburger */}
-          <div className="md:hidden">
+          {/* Mobile */}
+          <div className="md:hidden flex items-center gap-3">
+            {isAuthed && (
+              <button
+                onClick={() => router.push("/settings")}
+                className="w-9 h-9 rounded-full bg-white/20 overflow-hidden flex items-center justify-center border border-white/30"
+                aria-label="Open settings"
+              >
+                {!loading && profile?.avatarUrl ? (
+                  <img
+                    src={profile.avatarUrl}
+                    alt="Profile"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span className="text-xs font-semibold">
+                    {initials(profile?.nickname || "User")}
+                  </span>
+                )}
+              </button>
+            )}
+
             <button
               onClick={() => setIsOpen(!isOpen)}
               className="focus:outline-none"
@@ -77,18 +135,19 @@ export default function Navbar() {
         </div>
       </div>
 
-      {/* Mobile Menu */}
+      {/* Mobile menu */}
       {isOpen && (
         <div className="md:hidden bg-blue-600 px-4 pt-2 pb-4 space-y-2">
           <button
             onClick={() => {
-              router.push("/");
+              router.push("/home");
               setIsOpen(false);
             }}
             className="block w-full text-left hover:text-gray-200"
           >
             Home
           </button>
+
           <button
             onClick={() => {
               router.push("/family-photos");
@@ -98,12 +157,30 @@ export default function Navbar() {
           >
             Gallery
           </button>
-          <button
-            onClick={handleLogout}
-            className="block w-full text-left hover:text-gray-200"
-          >
-            Logout
-          </button>
+
+          {isAuthed && (
+            <>
+              <button
+                onClick={() => {
+                  router.push("/settings");
+                  setIsOpen(false);
+                }}
+                className="block w-full text-left hover:text-gray-200"
+              >
+                Settings
+              </button>
+
+              <button
+                onClick={async () => {
+                  await handleLogout();
+                  setIsOpen(false);
+                }}
+                className="block w-full text-left hover:text-gray-200"
+              >
+                Logout
+              </button>
+            </>
+          )}
         </div>
       )}
     </nav>

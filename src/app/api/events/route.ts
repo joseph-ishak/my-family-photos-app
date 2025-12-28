@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
 
 const ddb = DynamoDBDocumentClient.from(
   new DynamoDBClient({ region: "us-west-2" })
@@ -8,23 +8,28 @@ const ddb = DynamoDBDocumentClient.from(
 
 export async function GET() {
   try {
-    // Scan for all items with PK starting with "EVENT#"
     const result = await ddb.send(
-      new ScanCommand({
+      new QueryCommand({
         TableName: process.env.DYNAMO_TABLE_NAME!,
-        FilterExpression: "begins_with(PK, :eventPrefix)",
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
         ExpressionAttributeValues: {
-          ":eventPrefix": "EVENT#",
+          ":pk": "EVENT",
+          ":skPrefix": "EVENT#",
         },
-        ProjectionExpression: "eventId", // or whatever attribute stores the event name
+        ProjectionExpression: "eventId, SK",
       })
     );
 
-    // Extract unique event names/IDs
     const events = Array.from(
-      new Set(result.Items?.map((item) => item.eventId).filter(Boolean) ?? [])
-    );
-    // ...existing code...
+      new Set(
+        (result.Items ?? [])
+          .map((item: any) => (item?.eventId as string | undefined) ?? null)
+          .filter(Boolean) as string[]
+      )
+    )
+      .filter((e) => e.toLowerCase() !== "default")
+      .sort((a, b) => a.localeCompare(b));
+
     return NextResponse.json({ events });
   } catch (err) {
     console.error("Error fetching events:", err);

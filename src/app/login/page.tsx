@@ -2,9 +2,12 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useProfile } from "../components/ProfileProvider";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { refresh } = useProfile();
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -15,14 +18,19 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ username, password }),
       });
 
       if (res.ok) {
-        router.push("/home"); // redirect to home after login
+        await refresh();
+
+        const params = new URLSearchParams(window.location.search);
+        const next = params.get("next") || "/home";
+        router.push(next);
       } else {
-        const data = await res.json();
-        alert("Login failed: " + data.error);
+        const data = await res.json().catch(() => ({}));
+        alert("Login failed: " + (data.error || "Unknown error"));
       }
     } catch (err) {
       console.error(err);

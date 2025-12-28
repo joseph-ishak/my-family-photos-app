@@ -11,7 +11,7 @@ type Photo = {
 export default function HomePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<{ username: string } | null>(null);
+  const [user, setUser] = useState<{ nickname: string } | null>(null);
   const [recentPhotos, setRecentPhotos] = useState<Photo[]>([]);
 
   useEffect(() => {
@@ -47,7 +47,7 @@ export default function HomePage() {
       <div className="bg-white rounded-lg shadow-md p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-800">
-            Welcome, {user?.username}!
+            Welcome, {user?.nickname}!
           </h1>
           <p className="text-gray-600 mt-1">
             Here's a quick overview of your recent uploads.

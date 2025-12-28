@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   DynamoDBDocumentClient,
-  ScanCommand,
-  DeleteCommand,
   QueryCommand,
+  GetCommand,
+  DeleteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
   S3Client,
@@ -12,30 +13,42 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { getVerifiedUser } from "@/lib/auth-server";
 
 const ddb = DynamoDBDocumentClient.from(
   new DynamoDBClient({ region: "us-west-2" })
 );
 const s3 = new S3Client({ region: "us-west-2" });
 
-export async function GET() {
-  console.log("GET /api/photos called");
+export async function GET(req: NextRequest) {
+  const user = await getVerifiedUser(req);
+  if (!user?.sub)
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { searchParams } = new URL(req.url);
+  const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 50);
+  const cursor = searchParams.get("cursor");
+
+  const ExclusiveStartKey = cursor
+    ? JSON.parse(Buffer.from(cursor, "base64").toString("utf8"))
+    : undefined;
+
   try {
-    // Scan for all items where SK begins with "PHOTO#"
     const result = await ddb.send(
-      new ScanCommand({
+      new QueryCommand({
         TableName: process.env.DYNAMO_TABLE_NAME!,
-        FilterExpression: "begins_with(SK, :photoPrefix)",
-        ExpressionAttributeValues: {
-          ":photoPrefix": "PHOTO#",
-        },
-        ProjectionExpression: "s3Key, eventId, takenAt, ownerUserId, SK",
+        IndexName: "GSI1",
+        KeyConditionExpression: "GSI1PK = :pk",
+        ExpressionAttributeValues: { ":pk": "PHOTO" },
+        Limit: limit,
+        ScanIndexForward: false,
+        ExclusiveStartKey,
+        ProjectionExpression: "PK, SK, s3Key, eventId, takenAt, ownerUserId",
       })
     );
 
-    // For each photo, get a signed S3 URL and include eventId and takenAt
     const photos = await Promise.all(
-      (result.Items || []).map(async (item) => {
+      (result.Items || []).map(async (item: any) => {
         const url = await getSignedUrl(
           s3,
           new GetObjectCommand({
@@ -44,56 +57,74 @@ export async function GET() {
           }),
           { expiresIn: 3600 }
         );
-        console.log("Item fetched:", item);
+
         return {
           key: item.s3Key,
           url,
-          eventId: item.eventId, // <-- include eventId
+          eventId: item.eventId,
           takenAt: item.takenAt,
-          ownerId: item.ownerUserId, // <-- include takenAt
+          ownerUserId: item.ownerUserId,
+          pk: item.PK,
+          sk: item.SK,
         };
       })
     );
-    console.log("Fetched photos with signed URLs:", photos.length);
-    return NextResponse.json({ photos });
+
+    const nextCursor = result.LastEvaluatedKey
+      ? Buffer.from(JSON.stringify(result.LastEvaluatedKey), "utf8").toString(
+          "base64"
+        )
+      : null;
+
+    return NextResponse.json({ photos, nextCursor });
   } catch (err) {
     console.error("Error fetching photos:", err);
     return NextResponse.json({ photos: [] }, { status: 500 });
   }
 }
 
-export async function DELETE(req: Request) {
-  console.log("DELETE /api/photos called");
+export async function DELETE(req: NextRequest) {
+  const user = await getVerifiedUser(req);
+  if (!user?.sub)
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   const { searchParams } = new URL(req.url);
   const key = searchParams.get("key");
-  if (!key) return NextResponse.json({ error: "Missing key" }, { status: 400 });
+  const pk = searchParams.get("pk");
+  const sk = searchParams.get("sk");
 
-  // Scan for the item with this s3Key
-  const result = await ddb.send(
-    new ScanCommand({
+  if (!key || !pk || !sk) {
+    return NextResponse.json({ error: "Missing key pk sk" }, { status: 400 });
+  }
+
+  const itemRes = await ddb.send(
+    new GetCommand({
       TableName: process.env.DYNAMO_TABLE_NAME!,
-      FilterExpression: "s3Key = :key",
-      ExpressionAttributeValues: { ":key": key },
-      ProjectionExpression: "PK, SK",
+      Key: { PK: pk, SK: sk },
+      ProjectionExpression: "ownerUserId, s3Key",
     })
   );
-  const item = result.Items?.[0];
-  if (!item)
-    return NextResponse.json({ error: "Photo not found" }, { status: 404 });
 
-  // Delete from DynamoDB
+  const item: any = itemRes.Item;
+  if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  if (item.ownerUserId !== user.sub) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   await ddb.send(
     new DeleteCommand({
       TableName: process.env.DYNAMO_TABLE_NAME!,
-      Key: { PK: item.PK, SK: item.SK },
+      Key: { PK: pk, SK: sk },
+      ConditionExpression: "ownerUserId = :u",
+      ExpressionAttributeValues: { ":u": user.sub },
     })
   );
 
-  // Delete from S3
   await s3.send(
     new DeleteObjectCommand({
       Bucket: process.env.S3_BUCKET_NAME!,
-      Key: key,
+      Key: item.s3Key || key,
     })
   );
 
