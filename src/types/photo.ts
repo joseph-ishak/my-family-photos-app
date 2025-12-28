@@ -6,4 +6,6 @@ export type Photo = {
   ownerUserId?: string;
   pk?: string;
   sk?: string;
+  s3Key?: string;
+  mimeType?: string;
 };

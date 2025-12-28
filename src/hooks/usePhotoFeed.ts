@@ -1,3 +1,4 @@
+// src/hooks/usePhotoFeed.ts
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -11,6 +12,8 @@ export type Photo = {
   ownerUserId?: string;
   pk?: string;
   sk?: string;
+  s3Key?: string;
+  mimeType?: string;
 };
 
 type ApiPhotosResponse = {
@@ -244,6 +247,71 @@ export function usePhotosFeed({ pageSize = 20 }: Args) {
     refreshEvents();
   }, [fetchPage, refreshEvents]);
 
+  const updatePhotoUrl = useCallback((key: string, url: string) => {
+    setPhotos((prev) => prev.map((p) => (p.key === key ? { ...p, url } : p)));
+    setExpandedPhoto((prev) =>
+      prev && prev.key === key ? { ...prev, url } : prev
+    );
+  }, []);
+
+  const saveEditedPhoto = useCallback(
+    async (photo: Photo, blob: Blob) => {
+      const pk = photo.pk;
+      const sk = photo.sk;
+      const s3Key = photo.s3Key || photo.key;
+      const filetype = blob.type || photo.mimeType || "image/jpeg";
+
+      if (!pk || !sk || !s3Key) {
+        alert("Update failed. Missing pk or sk.");
+        return;
+      }
+
+      const r1 = await fetch("/api/photos/request-edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ pk, sk, s3Key, filetype }),
+      });
+
+      if (!r1.ok) {
+        const t = await r1.text().catch(() => "");
+        alert(t || "Update failed.");
+        return;
+      }
+
+      const d1 = (await r1.json()) as { signedUrl: string };
+
+      const put = await fetch(d1.signedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": filetype },
+        body: blob,
+      });
+
+      if (!put.ok) {
+        const t = await put.text().catch(() => "");
+        alert(t || "Upload failed.");
+        return;
+      }
+
+      const r2 = await fetch("/api/photos/commit-edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ pk, sk, s3Key, filetype }),
+      });
+
+      if (!r2.ok) {
+        const t = await r2.text().catch(() => "");
+        alert(t || "Commit failed.");
+        return;
+      }
+
+      const d2 = (await r2.json()) as { url: string };
+      if (d2?.url) updatePhotoUrl(photo.key, d2.url);
+    },
+    [updatePhotoUrl]
+  );
+
   return {
     existingEvents,
 
@@ -270,5 +338,7 @@ export function usePhotosFeed({ pageSize = 20 }: Args) {
     bulkDelete,
 
     handleUploadSuccess,
+
+    saveEditedPhoto,
   };
 }

@@ -1,3 +1,4 @@
+// src/app/api/photos/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
@@ -63,7 +64,8 @@ export async function GET(req: NextRequest) {
         Limit: limit,
         ScanIndexForward: false,
         ExclusiveStartKey,
-        ProjectionExpression: "PK, SK, s3Key, eventId, takenAt, ownerUserId",
+        ProjectionExpression:
+          "PK, SK, s3Key, eventId, takenAt, ownerUserId, mimeType",
       })
     );
 
@@ -80,6 +82,8 @@ export async function GET(req: NextRequest) {
 
         return {
           key: item.s3Key,
+          s3Key: item.s3Key,
+          mimeType: item.mimeType,
           url,
           eventId: item.eventId,
           takenAt: item.takenAt,

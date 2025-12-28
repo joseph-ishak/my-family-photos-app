@@ -1,3 +1,4 @@
+// src/app/family-photos/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -8,13 +9,19 @@ import GalleryHeader from "../components/family-photos/GalleryHeader";
 import FiltersBar from "../components/family-photos/FiltersBar";
 import BulkActionsBar from "../components/family-photos/BulkActionsBar";
 import PhotoGrid from "../components/family-photos/PhotoGrid";
+import PhotoEditorModal from "../components/family-photos/PhotoEditorModal";
 
 import { useAuthUser } from "../../hooks/useAuthUser";
 import { usePhotosFeed } from "../../hooks/usePhotoFeed";
 
+import type { Photo } from "../../hooks/usePhotoFeed";
+
 export default function FamilyPhotosPage() {
   const { loading, user } = useAuthUser();
   const [modalOpen, setModalOpen] = useState(false);
+
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingPhoto, setEditingPhoto] = useState<Photo | null>(null);
 
   const {
     existingEvents = [],
@@ -42,10 +49,15 @@ export default function FamilyPhotosPage() {
     bulkDelete,
 
     handleUploadSuccess,
+
+    saveEditedPhoto,
   } = usePhotosFeed({ pageSize: 20 });
 
   if (loading)
     return <p className="p-4 text-center">Checking authentication...</p>;
+
+  const canEditEditing =
+    !!editingPhoto && !!user?.sub && editingPhoto.ownerUserId === user.sub;
 
   return (
     <div className="p-4 max-w-6xl mx-auto space-y-6">
@@ -62,6 +74,20 @@ export default function FamilyPhotosPage() {
       <PhotoLightbox
         photo={expandedPhoto}
         onClose={() => setExpandedPhoto(null)}
+      />
+
+      <PhotoEditorModal
+        open={editorOpen}
+        photoUrl={editingPhoto?.url || ""}
+        canEdit={canEditEditing}
+        onClose={() => {
+          setEditorOpen(false);
+          setEditingPhoto(null);
+        }}
+        onSave={async (blob) => {
+          if (!editingPhoto) return;
+          await saveEditedPhoto(editingPhoto, blob);
+        }}
       />
 
       <FiltersBar
@@ -92,6 +118,10 @@ export default function FamilyPhotosPage() {
         onDelete={(key) => {
           console.log("FamilyPhotosPage onDelete received key", key);
           deletePhoto(key);
+        }}
+        onUpdate={(photo) => {
+          setEditingPhoto(photo);
+          setEditorOpen(true);
         }}
       />
 

@@ -1,3 +1,4 @@
+// src/app/components/family-photos/PhotoGrid.tsx
 "use client";
 
 import type { Photo } from "../../../types/photo";
@@ -10,6 +11,7 @@ type Props = {
   onSelectChange: (key: string, checked: boolean) => void;
   onOpen: (photo: Photo) => void;
   onDelete: (key: string) => void | Promise<void>;
+  onUpdate: (photo: Photo) => void;
 };
 
 export default function PhotoGrid({
@@ -19,6 +21,7 @@ export default function PhotoGrid({
   onSelectChange,
   onOpen,
   onDelete,
+  onUpdate,
 }: Props) {
   return (
     <div className="grid gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
@@ -38,7 +41,7 @@ export default function PhotoGrid({
               console.log("PhotoCard onDelete fired for", photo.key);
               await onDelete(photo.key);
             }}
-            onUpdate={() => alert("Update or crop not implemented yet")}
+            onUpdate={() => onUpdate(photo)}
           />
         );
       })}
