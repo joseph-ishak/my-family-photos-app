@@ -1,7 +1,7 @@
 // src/app/components/family-photos/PhotoCard.tsx
 "use client";
 
-import type { Photo } from "../../types/photo";
+import type { Photo } from "../../../types/photo";
 
 type Props = {
   photo: Photo;

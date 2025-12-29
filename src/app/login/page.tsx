@@ -10,28 +10,42 @@ export default function LoginPage() {
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+
+  const [needsNewPassword, setNeedsNewPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
     setLoading(true);
     try {
+      const body: any = { username, password };
+      if (needsNewPassword) body.newPassword = newPassword;
+
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(body),
       });
 
       if (res.ok) {
         await refresh();
-
         const params = new URLSearchParams(window.location.search);
         const next = params.get("next") || "/home";
         router.push(next);
-      } else {
-        const data = await res.json().catch(() => ({}));
-        alert("Login failed: " + (data.error || "Unknown error"));
+        return;
       }
+
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 409 && data.error === "NEW_PASSWORD_REQUIRED") {
+        setNeedsNewPassword(true);
+        alert("You must set a new password for this account.");
+        return;
+      }
+
+      alert("Login failed: " + (data.error || "Unknown error"));
     } catch (err) {
       console.error(err);
       alert("An error occurred during login");
@@ -62,19 +76,40 @@ export default function LoginPage() {
             placeholder="Username or Email"
             className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
+
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
+            placeholder={needsNewPassword ? "Temporary password" : "Password"}
             className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
+
+          {needsNewPassword && (
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="New password"
+              className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          )}
+
           <button
             onClick={handleLogin}
-            disabled={loading}
+            disabled={
+              loading ||
+              !username ||
+              !password ||
+              (needsNewPassword && !newPassword)
+            }
             className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50"
           >
-            {loading ? "Logging in..." : "Login"}
+            {loading
+              ? "Logging in..."
+              : needsNewPassword
+              ? "Set new password"
+              : "Login"}
           </button>
         </div>
 

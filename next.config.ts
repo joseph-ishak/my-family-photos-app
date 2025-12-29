@@ -1,9 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  experimental: {
-    turbopack: false, // fallback to Webpack
-  },
+  experimental: {},
 };
 
 export default nextConfig;

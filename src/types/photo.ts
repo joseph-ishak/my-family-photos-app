@@ -8,4 +8,6 @@ export type Photo = {
   sk?: string;
   s3Key?: string;
   mimeType?: string;
+  mediaType?: "photo" | "video";
+  thumbnailUrl?: string;
 };

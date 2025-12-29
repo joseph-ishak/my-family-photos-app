@@ -2,7 +2,7 @@
 "use client";
 
 import React from "react";
-import type { Photo } from "../family-photos/page";
+import type { Photo } from "../../types/photo";
 
 type Props = {
   photo: Photo | null;

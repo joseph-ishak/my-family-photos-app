@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useProfile } from "../components/ProfileProvider";
 
 type Photo = {
   key: string;
@@ -13,6 +14,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<{ nickname: string } | null>(null);
   const [recentPhotos, setRecentPhotos] = useState<Photo[]>([]);
+  const profile = useProfile();
 
   useEffect(() => {
     async function fetchUserAndPhotos() {
@@ -47,7 +49,7 @@ export default function HomePage() {
       <div className="bg-white rounded-lg shadow-md p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-800">
-            Welcome, {user?.nickname}!
+            Welcome, {profile?.profile?.nickname}!
           </h1>
           <p className="text-gray-600 mt-1">
             Here's a quick overview of your recent uploads.

@@ -56,10 +56,8 @@ export async function GET(req: NextRequest) {
         TableName: process.env.DYNAMO_TABLE_NAME!,
         IndexName: "GSI1",
         KeyConditionExpression: "GSI1PK = :pk",
-        FilterExpression: "ownerUserId = :u",
         ExpressionAttributeValues: {
           ":pk": "PHOTO",
-          ":u": user.sub,
         },
         Limit: limit,
         ScanIndexForward: false,
