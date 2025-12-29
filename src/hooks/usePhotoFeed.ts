@@ -16,6 +16,8 @@ export type Photo = {
   mimeType?: string;
 
   mediaType?: "photo" | "video";
+
+  thumbnailKey?: string;
   thumbnailUrl?: string;
 };
 

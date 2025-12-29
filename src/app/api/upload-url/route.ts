@@ -17,6 +17,10 @@ function isValidMediaType(value: unknown): value is "photo" | "video" {
   return value === "photo" || value === "video";
 }
 
+function isValidKind(value: unknown): value is "original" | "preview" {
+  return value === "original" || value === "preview";
+}
+
 export async function POST(req: NextRequest) {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
@@ -35,6 +39,16 @@ export async function POST(req: NextRequest) {
     ? mediaTypeRaw
     : "photo";
 
+  const kindRaw = body?.kind;
+  const kind: "original" | "preview" = isValidKind(kindRaw)
+    ? kindRaw
+    : "original";
+
+  const thumbnailKeyFromClient: string | undefined =
+    typeof body?.thumbnailKey === "string" && body.thumbnailKey.trim()
+      ? body.thumbnailKey.trim()
+      : undefined;
+
   if (!filename || !filetype) {
     return NextResponse.json(
       { error: "filename and filetype are required" },
@@ -42,33 +56,46 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const mediaId = uuidv4();
-  const uploadedAt = new Date().toISOString();
-
   const safeName = String(filename ?? "upload")
     .replace(/[^a-zA-Z0-9._]/g, "_")
     .slice(0, 200);
 
   const eventName = String(eventId ?? "default").trim() || "default";
 
-  const prefix = mediaType === "video" ? "videos" : "photos";
-  const s3Key = `${prefix}/${mediaId}_${safeName}`;
+  const mediaId = uuidv4();
+  const uploadedAt = new Date().toISOString();
+  const timePart = takenAt ?? uploadedAt;
+  const sk = `MEDIA#${timePart}#${mediaId}`;
+
+  const bucket = process.env.S3_BUCKET_NAME!;
+  const table = process.env.DYNAMO_TABLE_NAME!;
+
+  if (!bucket || !table) {
+    return NextResponse.json(
+      { error: "Server config missing" },
+      { status: 500 }
+    );
+  }
+
+  const basePrefix = kind === "preview" ? "previews" : "uploads";
+  const typePrefix = mediaType === "video" ? "videos" : "photos";
+  const s3Key = `${basePrefix}/${typePrefix}/${mediaId}_${safeName}`;
 
   const command = new PutObjectCommand({
-    Bucket: process.env.S3_BUCKET_NAME!,
+    Bucket: bucket,
     Key: s3Key,
     ContentType: filetype,
   });
 
   const signedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
 
-  const timePart = takenAt ?? uploadedAt;
-
-  const sk = `MEDIA#${timePart}#${mediaId}`;
+  if (kind === "preview") {
+    return NextResponse.json({ signedUrl, s3Key, mediaType, kind });
+  }
 
   await ddb.send(
     new PutCommand({
-      TableName: process.env.DYNAMO_TABLE_NAME!,
+      TableName: table,
       Item: {
         PK: `EVENT#${eventName}`,
         SK: sk,
@@ -82,8 +109,10 @@ export async function POST(req: NextRequest) {
         ownerUserId: user.sub,
         takenAt: timePart,
         uploadedAt,
-        s3Bucket: process.env.S3_BUCKET_NAME,
+        s3Bucket: bucket,
         s3Key,
+        thumbnailKey:
+          mediaType === "photo" ? thumbnailKeyFromClient : undefined,
         mimeType: filetype,
         filename: safeName,
       },
@@ -92,7 +121,7 @@ export async function POST(req: NextRequest) {
 
   await ddb.send(
     new PutCommand({
-      TableName: process.env.DYNAMO_TABLE_NAME!,
+      TableName: table,
       Item: {
         PK: "EVENT",
         SK: `EVENT#${eventName}`,
@@ -102,5 +131,5 @@ export async function POST(req: NextRequest) {
     })
   );
 
-  return NextResponse.json({ signedUrl, s3Key, mediaType, sk });
+  return NextResponse.json({ signedUrl, s3Key, mediaType, kind, sk });
 }

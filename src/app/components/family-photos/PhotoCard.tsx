@@ -29,6 +29,8 @@ export default function PhotoCard({
 }: Props) {
   const video = isVideo(photo);
 
+  const thumbSrc = photo.thumbnailUrl || photo.url;
+
   return (
     <div className="overflow-hidden rounded-lg shadow-lg bg-gray-100 relative group">
       {canEdit && (
@@ -44,6 +46,7 @@ export default function PhotoCard({
         <div className="w-full h-56 cursor-pointer relative" onClick={onOpen}>
           <video
             src={photo.url}
+            poster={photo.thumbnailUrl}
             className="w-full h-56 object-cover"
             muted
             playsInline
@@ -57,7 +60,7 @@ export default function PhotoCard({
         </div>
       ) : (
         <img
-          src={photo.url}
+          src={thumbSrc}
           alt="Family photo"
           className="w-full h-56 object-cover cursor-pointer"
           onClick={onOpen}

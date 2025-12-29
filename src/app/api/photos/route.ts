@@ -36,6 +36,18 @@ function chunk<T>(arr: T[], size: number) {
   return out;
 }
 
+async function signGetUrl(key?: string) {
+  if (!key) return undefined;
+  return await getSignedUrl(
+    s3,
+    new GetObjectCommand({
+      Bucket: process.env.S3_BUCKET_NAME!,
+      Key: key,
+    }),
+    { expiresIn: 3600 }
+  );
+}
+
 export async function GET(req: NextRequest) {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
@@ -63,20 +75,14 @@ export async function GET(req: NextRequest) {
         ScanIndexForward: false,
         ExclusiveStartKey,
         ProjectionExpression:
-          "PK, SK, s3Key, eventId, takenAt, ownerUserId, mimeType, mediaType",
+          "PK, SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
       })
     );
 
     const photos = await Promise.all(
       (result.Items || []).map(async (item: any) => {
-        const url = await getSignedUrl(
-          s3,
-          new GetObjectCommand({
-            Bucket: process.env.S3_BUCKET_NAME!,
-            Key: item.s3Key,
-          }),
-          { expiresIn: 3600 }
-        );
+        const url = await signGetUrl(item.s3Key);
+        const thumbnailUrl = await signGetUrl(item.thumbnailKey);
 
         const inferredMediaType =
           item.mediaType ??
@@ -88,6 +94,8 @@ export async function GET(req: NextRequest) {
         return {
           key: item.s3Key,
           s3Key: item.s3Key,
+          thumbnailKey: item.thumbnailKey,
+          thumbnailUrl,
           mimeType: item.mimeType,
           mediaType: inferredMediaType,
           url,
@@ -168,7 +176,7 @@ export async function DELETE(req: NextRequest) {
           RequestItems: {
             [table]: {
               Keys: kc,
-              ProjectionExpression: "PK, SK, ownerUserId, s3Key",
+              ProjectionExpression: "PK, SK, ownerUserId, s3Key, thumbnailKey",
             },
           },
         })
@@ -207,20 +215,22 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    const s3Keys = deletable
-      .map((d: any) => d.s3Key)
-      .filter(Boolean)
-      .map((k: string) => ({ Key: k }));
+    const allKeys = deletable
+      .flatMap((d: any) => [d.s3Key, d.thumbnailKey])
+      .filter(Boolean) as string[];
 
-    if (s3Keys.length === 1) {
+    const uniqueKeys = Array.from(new Set(allKeys));
+    const s3Objects = uniqueKeys.map((k) => ({ Key: k }));
+
+    if (s3Objects.length === 1) {
       await s3.send(
         new DeleteObjectCommand({
           Bucket: process.env.S3_BUCKET_NAME!,
-          Key: s3Keys[0].Key!,
+          Key: s3Objects[0].Key!,
         })
       );
-    } else if (s3Keys.length > 1) {
-      const s3Chunks = chunk(s3Keys, 1000);
+    } else if (s3Objects.length > 1) {
+      const s3Chunks = chunk(s3Objects, 1000);
       for (const sc of s3Chunks) {
         await s3.send(
           new DeleteObjectsCommand({

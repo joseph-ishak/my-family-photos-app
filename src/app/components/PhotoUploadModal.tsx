@@ -24,6 +24,50 @@ function isImageFile(file: File) {
   return file.type.startsWith("image/");
 }
 
+async function fileToPreviewBlob(file: File): Promise<Blob> {
+  const url = URL.createObjectURL(file);
+
+  try {
+    const img = new Image();
+    img.decoding = "async";
+
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("Image load failed"));
+      img.src = url;
+    });
+
+    const maxSide = 480;
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+
+    const scale = Math.min(1, maxSide / Math.max(w, h));
+    const outW = Math.max(1, Math.round(w * scale));
+    const outH = Math.max(1, Math.round(h * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas context missing");
+
+    ctx.drawImage(img, 0, 0, outW, outH);
+
+    const blob: Blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("Preview encode failed"))),
+        "image/jpeg",
+        0.78
+      );
+    });
+
+    return blob;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export default function PhotoUploadModal({
   open,
   onClose,
@@ -84,41 +128,81 @@ export default function PhotoUploadModal({
     return file;
   }
 
-  async function uploadOneFile(
-    file: File,
-    eventIdValue: string,
-    userId: string
-  ) {
-    const mediaType = isVideoFile(file) ? "video" : "photo";
-
+  async function requestSignedUrl(args: {
+    filename: string;
+    filetype: string;
+    userId: string;
+    eventId: string;
+    mediaType: "photo" | "video";
+    kind: "preview" | "original";
+    thumbnailKey?: string;
+  }) {
     const res = await fetch("/api/upload-url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: file.name,
-        filetype: file.type,
-        userId,
-        eventId: eventIdValue,
-        mediaType,
-      }),
+      body: JSON.stringify(args),
     });
 
     if (!res.ok) {
       throw new Error(`upload url failed: ${res.status}`);
     }
 
-    const { signedUrl } = await res.json();
-    if (!signedUrl) throw new Error("signedUrl missing");
+    return (await res.json()) as {
+      signedUrl: string;
+      s3Key: string;
+      mediaType: "photo" | "video";
+      kind: "preview" | "original";
+    };
+  }
 
+  async function putToS3(signedUrl: string, contentType: string, body: Blob) {
     const uploadRes = await fetch(signedUrl, {
       method: "PUT",
-      headers: { "Content-Type": file.type },
-      body: file,
+      headers: { "Content-Type": contentType },
+      body,
     });
 
     if (!uploadRes.ok) {
       throw new Error(`upload failed: ${uploadRes.status}`);
     }
+  }
+
+  async function uploadOneFile(
+    file: File,
+    eventIdValue: string,
+    userId: string
+  ) {
+    const mediaType: "photo" | "video" = isVideoFile(file) ? "video" : "photo";
+
+    let thumbnailKey: string | undefined;
+
+    if (mediaType === "photo") {
+      const previewBlob = await fileToPreviewBlob(file);
+
+      const previewResp = await requestSignedUrl({
+        filename: "preview.jpg",
+        filetype: "image/jpeg",
+        userId,
+        eventId: eventIdValue,
+        mediaType,
+        kind: "preview",
+      });
+
+      thumbnailKey = previewResp.s3Key;
+      await putToS3(previewResp.signedUrl, "image/jpeg", previewBlob);
+    }
+
+    const originalResp = await requestSignedUrl({
+      filename: file.name,
+      filetype: file.type,
+      userId,
+      eventId: eventIdValue,
+      mediaType,
+      kind: "original",
+      thumbnailKey,
+    });
+
+    await putToS3(originalResp.signedUrl, file.type, file);
   }
 
   async function runWithConcurrency(
