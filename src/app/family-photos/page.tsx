@@ -101,6 +101,9 @@ export default function FamilyPhotosPage() {
 
       <BulkActionsBar
         selectedCount={selectedKeys.length}
+        totalCount={filteredPhotos.length}
+        onSelectAll={() => setSelectedKeys(filteredPhotos.map((p) => p.key))}
+        onClearSelection={() => setSelectedKeys([])}
         onDeleteSelected={bulkDelete}
       />
 

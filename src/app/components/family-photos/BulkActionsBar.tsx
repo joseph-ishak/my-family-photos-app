@@ -4,17 +4,25 @@ import { useState } from "react";
 
 type Props = {
   selectedCount: number;
+  totalCount: number;
+  onSelectAll: () => void;
+  onClearSelection: () => void;
   onDeleteSelected: () => void | Promise<void>;
 };
 
 export default function BulkActionsBar({
   selectedCount,
+  totalCount,
+  onSelectAll,
+  onClearSelection,
   onDeleteSelected,
 }: Props) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  if (selectedCount === 0) return null;
+  const allSelected = totalCount > 0 && selectedCount === totalCount;
+
+  if (totalCount === 0) return null;
 
   async function handleConfirmDelete() {
     if (deleting) return;
@@ -34,7 +42,24 @@ export default function BulkActionsBar({
 
   return (
     <>
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-3">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            if (allSelected) {
+              onClearSelection();
+            } else {
+              onSelectAll();
+            }
+          }}
+          className="bg-gray-800 text-white px-4 py-2 rounded shadow hover:bg-gray-900"
+        >
+          {allSelected ? "Clear Selection" : "Select All"}
+        </button>
+
         <button
           type="button"
           onClick={(e) => {
@@ -44,7 +69,8 @@ export default function BulkActionsBar({
             console.log("Delete Selected clicked. count =", selectedCount);
             setConfirmOpen(true);
           }}
-          className="bg-red-600 text-white px-4 py-2 rounded shadow hover:bg-red-700"
+          disabled={selectedCount === 0}
+          className="bg-red-600 text-white px-4 py-2 rounded shadow hover:bg-red-700 disabled:opacity-50"
         >
           Delete Selected ({selectedCount})
         </button>
@@ -75,7 +101,7 @@ export default function BulkActionsBar({
               <button
                 type="button"
                 onClick={handleConfirmDelete}
-                disabled={deleting}
+                disabled={deleting || selectedCount === 0}
                 className="px-5 py-2 rounded bg-red-600 text-white font-semibold hover:bg-red-700 disabled:opacity-50"
               >
                 {deleting ? "Deleting..." : "Delete"}
