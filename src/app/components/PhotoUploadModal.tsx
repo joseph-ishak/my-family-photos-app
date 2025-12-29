@@ -1,4 +1,3 @@
-// src/app/components/PhotoUploadModal.tsx
 "use client";
 
 import React, { useState } from "react";
@@ -24,7 +23,7 @@ function isImageFile(file: File) {
   return file.type.startsWith("image/");
 }
 
-async function fileToPreviewBlob(file: File): Promise<Blob> {
+async function imageFileToPreviewBlob(file: File): Promise<Blob> {
   const url = URL.createObjectURL(file);
 
   try {
@@ -59,6 +58,95 @@ async function fileToPreviewBlob(file: File): Promise<Blob> {
         (b) => (b ? resolve(b) : reject(new Error("Preview encode failed"))),
         "image/jpeg",
         0.78
+      );
+    });
+
+    return blob;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function videoFileToPosterBlob(file: File): Promise<Blob> {
+  const url = URL.createObjectURL(file);
+
+  try {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.src = url;
+
+    await new Promise<void>((resolve, reject) => {
+      const onLoaded = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error("Video metadata load failed"));
+      };
+      const cleanup = () => {
+        video.removeEventListener("loadedmetadata", onLoaded);
+        video.removeEventListener("error", onError);
+      };
+
+      video.addEventListener("loadedmetadata", onLoaded);
+      video.addEventListener("error", onError);
+    });
+
+    const targetTime = Math.min(0.2, Math.max(0, (video.duration || 0) * 0.05));
+
+    await new Promise<void>((resolve, reject) => {
+      const onSeeked = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error("Video seek failed"));
+      };
+      const cleanup = () => {
+        video.removeEventListener("seeked", onSeeked);
+        video.removeEventListener("error", onError);
+      };
+
+      video.addEventListener("seeked", onSeeked);
+      video.addEventListener("error", onError);
+
+      try {
+        video.currentTime = targetTime;
+      } catch {
+        cleanup();
+        reject(new Error("Video currentTime set failed"));
+      }
+    });
+
+    const vw = video.videoWidth || 0;
+    const vh = video.videoHeight || 0;
+    if (!vw || !vh) {
+      throw new Error("Video dimensions missing");
+    }
+
+    const maxSide = 480;
+    const scale = Math.min(1, maxSide / Math.max(vw, vh));
+    const outW = Math.max(1, Math.round(vw * scale));
+    const outH = Math.max(1, Math.round(vh * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas context missing");
+
+    ctx.drawImage(video, 0, 0, outW, outH);
+
+    const blob: Blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("Poster encode failed"))),
+        "image/jpeg",
+        0.8
       );
     });
 
@@ -177,7 +265,7 @@ export default function PhotoUploadModal({
     let thumbnailKey: string | undefined;
 
     if (mediaType === "photo") {
-      const previewBlob = await fileToPreviewBlob(file);
+      const previewBlob = await imageFileToPreviewBlob(file);
 
       const previewResp = await requestSignedUrl({
         filename: "preview.jpg",
@@ -190,6 +278,29 @@ export default function PhotoUploadModal({
 
       thumbnailKey = previewResp.s3Key;
       await putToS3(previewResp.signedUrl, "image/jpeg", previewBlob);
+    }
+
+    if (mediaType === "video") {
+      try {
+        const posterBlob = await videoFileToPosterBlob(file);
+
+        const previewResp = await requestSignedUrl({
+          filename: "poster.jpg",
+          filetype: "image/jpeg",
+          userId,
+          eventId: eventIdValue,
+          mediaType,
+          kind: "preview",
+        });
+
+        thumbnailKey = previewResp.s3Key;
+        await putToS3(previewResp.signedUrl, "image/jpeg", posterBlob);
+      } catch (e) {
+        console.warn(
+          "Video poster generation failed, continuing without it",
+          e
+        );
+      }
     }
 
     const originalResp = await requestSignedUrl({

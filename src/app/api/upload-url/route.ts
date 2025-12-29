@@ -111,8 +111,7 @@ export async function POST(req: NextRequest) {
         uploadedAt,
         s3Bucket: bucket,
         s3Key,
-        thumbnailKey:
-          mediaType === "photo" ? thumbnailKeyFromClient : undefined,
+        thumbnailKey: thumbnailKeyFromClient,
         mimeType: filetype,
         filename: safeName,
       },
