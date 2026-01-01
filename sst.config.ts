@@ -24,6 +24,7 @@ export default $config({
     }
 
     const uploads = new sst.aws.Bucket("ExistingUploadsBucket", {
+      access: "cloudfront",
       transform: {
         bucket: (args, opts) => {
           args.bucket = uploadsBucketName;
@@ -35,6 +36,15 @@ export default $config({
 
     const table = sst.aws.Dynamo.get("ExistingPhotosTable", photosTableName);
 
+    const previewsRouter = new sst.aws.Router("PreviewsCdn");
+
+    previewsRouter.routeBucket("/", uploads, {
+      rewrite: {
+        regex: "^/(.*)$",
+        to: "/previews/$1",
+      },
+    });
+
     const site = new sst.aws.Nextjs("Site", {
       environment: {
         S3_BUCKET_NAME: uploads.name,
@@ -42,12 +52,15 @@ export default $config({
         COGNITO_USER_POOL_ID: process.env.COGNITO_USER_POOL_ID!,
         COGNITO_APP_CLIENT_ID: process.env.COGNITO_APP_CLIENT_ID!,
         COGNITO_REGION: process.env.COGNITO_REGION!,
+
+        PREVIEWS_CDN_URL: previewsRouter.url,
       },
-      link: [uploads, table],
+      link: [uploads, table, previewsRouter],
     });
 
     return {
       Url: site.url,
+      PreviewsCdnUrl: previewsRouter.url,
       UploadsBucket: uploads.name,
       PhotosTable: table.name,
     };

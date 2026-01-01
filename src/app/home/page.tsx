@@ -7,6 +7,7 @@ import { useProfile } from "../components/ProfileProvider";
 type Photo = {
   key: string;
   url: string;
+  thumbnailUrl?: string;
 };
 
 export default function HomePage() {
@@ -78,7 +79,7 @@ export default function HomePage() {
                 className="rounded-lg overflow-hidden shadow hover:scale-105 transform transition"
               >
                 <img
-                  src={photo.url}
+                  src={photo.thumbnailUrl}
                   alt="Recent upload"
                   className="w-full h-40 object-cover"
                 />

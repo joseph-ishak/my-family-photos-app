@@ -48,6 +48,19 @@ async function signGetUrl(key?: string) {
   );
 }
 
+function toPreviewPath(key: string) {
+  if (key.startsWith("previews/")) return key.slice("previews/".length);
+  if (key.startsWith("uploads/")) return key.slice("uploads/".length);
+  return key;
+}
+
+function previewUrlForKey(key: string) {
+  const base = process.env.PREVIEWS_CDN_URL;
+  if (!base) throw new Error("Missing PREVIEWS_CDN_URL");
+  const rel = toPreviewPath(key);
+  return new URL(rel, base.endsWith("/") ? base : base + "/").toString();
+}
+
 export async function GET(req: NextRequest) {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
@@ -82,7 +95,12 @@ export async function GET(req: NextRequest) {
     const photos = await Promise.all(
       (result.Items || []).map(async (item: any) => {
         const url = await signGetUrl(item.s3Key);
-        const thumbnailUrl = await signGetUrl(item.thumbnailKey);
+
+        const thumbnailUrl = item.thumbnailKey
+          ? previewUrlForKey(item.thumbnailKey)
+          : item.s3Key
+          ? previewUrlForKey(item.s3Key)
+          : undefined;
 
         const inferredMediaType =
           item.mediaType ??

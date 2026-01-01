@@ -149,3 +149,4 @@ docs/*
 
 # open-next
 .open-next
+export_env_vars

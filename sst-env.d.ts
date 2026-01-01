@@ -13,6 +13,10 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Bucket"
     }
+    "PreviewsCdn": {
+      "type": "sst.aws.Router"
+      "url": string
+    }
     "Site": {
       "type": "sst.aws.Nextjs"
       "url": string

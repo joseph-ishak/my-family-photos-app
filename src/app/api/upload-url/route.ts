@@ -85,6 +85,12 @@ export async function POST(req: NextRequest) {
     Bucket: bucket,
     Key: s3Key,
     ContentType: filetype,
+
+    ...(kind === "preview"
+      ? {
+          CacheControl: "public, max-age=31536000, immutable",
+        }
+      : {}),
   });
 
   const signedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
