@@ -1,4 +1,3 @@
-// src/hooks/usePhotoFeed.ts
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -28,6 +27,7 @@ type ApiPhotosResponse = {
 
 type Args = {
   pageSize?: number;
+  initialEventFilter?: string;
 };
 
 function isVideo(p: Photo) {
@@ -35,7 +35,9 @@ function isVideo(p: Photo) {
   return (p.mimeType ?? "").startsWith("video/");
 }
 
-export function usePhotosFeed({ pageSize = 20 }: Args) {
+export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
+  const initialEvent = (initialEventFilter ?? "").trim();
+
   const [existingEvents, setExistingEvents] = useState<string[]>([]);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -44,7 +46,7 @@ export function usePhotosFeed({ pageSize = 20 }: Args) {
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [expandedPhoto, setExpandedPhoto] = useState<Photo | null>(null);
 
-  const [eventFilter, setEventFilter] = useState("");
+  const [eventFilter, setEventFilter] = useState(initialEvent);
   const [dateFilter, setDateFilter] = useState("");
 
   const clearFilters = useCallback(() => {
@@ -91,7 +93,11 @@ export function usePhotosFeed({ pageSize = 20 }: Args) {
           cache: "no-store",
         });
 
-        if (!res.ok) throw new Error(`Failed to fetch photos: ${res.status}`);
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          console.error("GET /api/photos failed", res.status, text);
+          throw new Error(`Failed to fetch photos: ${res.status} ${text}`);
+        }
 
         const data = (await res.json()) as ApiPhotosResponse;
 

@@ -1,10 +1,13 @@
-// src/app/api/upload-url/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { PutCommand, DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import {
+  PutCommand,
+  UpdateCommand,
+  DynamoDBDocumentClient,
+} from "@aws-sdk/lib-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 import { getVerifiedUser } from "@/lib/auth-server";
 
@@ -27,11 +30,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json();
+  const body = await req.json().catch(() => ({} as any));
 
   const filename = body?.filename;
   const filetype = body?.filetype;
-  const eventId = body?.eventId;
+  const eventIdRaw = body?.eventId;
   const takenAt = body?.takenAt;
 
   const mediaTypeRaw = body?.mediaType;
@@ -60,7 +63,7 @@ export async function POST(req: NextRequest) {
     .replace(/[^a-zA-Z0-9._]/g, "_")
     .slice(0, 200);
 
-  const eventName = String(eventId ?? "default").trim() || "default";
+  const eventName = String(eventIdRaw ?? "default").trim() || "default";
 
   const mediaId = uuidv4();
   const uploadedAt = new Date().toISOString();
@@ -85,7 +88,6 @@ export async function POST(req: NextRequest) {
     Bucket: bucket,
     Key: s3Key,
     ContentType: filetype,
-
     ...(kind === "preview"
       ? {
           CacheControl: "public, max-age=31536000, immutable",
@@ -124,14 +126,23 @@ export async function POST(req: NextRequest) {
     })
   );
 
+  const coverKey = thumbnailKeyFromClient ?? s3Key;
+
   await ddb.send(
-    new PutCommand({
+    new UpdateCommand({
       TableName: table,
-      Item: {
-        PK: "EVENT",
-        SK: `EVENT#${eventName}`,
-        eventId: eventName,
-        updatedAt: uploadedAt,
+      Key: { PK: "EVENT", SK: `EVENT#${eventName}` },
+      UpdateExpression:
+        "ADD photoCount :one SET updatedAt = :now, createdAt = if_not_exists(createdAt, :now), #name = if_not_exists(#name, :name), eventId = if_not_exists(eventId, :eventId), coverKey = if_not_exists(coverKey, :coverKey)",
+      ExpressionAttributeNames: {
+        "#name": "name",
+      },
+      ExpressionAttributeValues: {
+        ":one": 1,
+        ":now": uploadedAt,
+        ":name": eventName,
+        ":eventId": eventName,
+        ":coverKey": coverKey,
       },
     })
   );

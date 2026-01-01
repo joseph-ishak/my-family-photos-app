@@ -1,4 +1,3 @@
-// src/app/family-photos/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -16,7 +15,11 @@ import { usePhotosFeed } from "../../hooks/usePhotoFeed";
 
 import type { Photo } from "../../hooks/usePhotoFeed";
 
-export default function FamilyPhotosPage() {
+type Props = {
+  initialEventFilter?: string;
+};
+
+export default function FamilyPhotosPage({ initialEventFilter }: Props) {
   const { loading, user } = useAuthUser();
   const [modalOpen, setModalOpen] = useState(false);
 
@@ -51,7 +54,7 @@ export default function FamilyPhotosPage() {
     handleUploadSuccess,
 
     saveEditedPhoto,
-  } = usePhotosFeed({ pageSize: 20 });
+  } = usePhotosFeed({ pageSize: 20, initialEventFilter });
 
   if (loading)
     return <p className="p-4 text-center">Checking authentication...</p>;

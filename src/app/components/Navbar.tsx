@@ -23,7 +23,6 @@ export default function Navbar() {
     <nav className="bg-blue-600 text-white shadow-md">
       <div className="max-w-6xl mx-auto px-4">
         <div className="flex justify-between items-center h-16">
-          {/* Brand */}
           <div
             className="flex-shrink-0 text-2xl font-bold cursor-pointer"
             onClick={() => router.push("/home")}
@@ -31,7 +30,6 @@ export default function Navbar() {
             Family Photos
           </div>
 
-          {/* Desktop */}
           <div className="hidden md:flex space-x-6 items-center">
             <button
               onClick={() => router.push("/home")}
@@ -45,6 +43,13 @@ export default function Navbar() {
               className="hover:text-gray-200"
             >
               Gallery
+            </button>
+
+            <button
+              onClick={() => router.push("/events")}
+              className="hover:text-gray-200"
+            >
+              Events
             </button>
 
             {isAuthed && (
@@ -81,7 +86,6 @@ export default function Navbar() {
             )}
           </div>
 
-          {/* Mobile */}
           <div className="md:hidden flex items-center gap-3">
             {isAuthed && (
               <button
@@ -135,7 +139,6 @@ export default function Navbar() {
         </div>
       </div>
 
-      {/* Mobile menu */}
       {isOpen && (
         <div className="md:hidden bg-blue-600 px-4 pt-2 pb-4 space-y-2">
           <button
@@ -156,6 +159,16 @@ export default function Navbar() {
             className="block w-full text-left hover:text-gray-200"
           >
             Gallery
+          </button>
+
+          <button
+            onClick={() => {
+              router.push("/events");
+              setIsOpen(false);
+            }}
+            className="block w-full text-left hover:text-gray-200"
+          >
+            Events
           </button>
 
           {isAuthed && (

@@ -1,4 +1,3 @@
-// src/app/api/photos/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
@@ -7,6 +6,7 @@ import {
   QueryCommand,
   BatchGetCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
   S3Client,
@@ -194,7 +194,8 @@ export async function DELETE(req: NextRequest) {
           RequestItems: {
             [table]: {
               Keys: kc,
-              ProjectionExpression: "PK, SK, ownerUserId, s3Key, thumbnailKey",
+              ProjectionExpression:
+                "PK, SK, ownerUserId, s3Key, thumbnailKey, eventId",
             },
           },
         })
@@ -254,6 +255,33 @@ export async function DELETE(req: NextRequest) {
           new DeleteObjectsCommand({
             Bucket: process.env.S3_BUCKET_NAME!,
             Delete: { Objects: sc, Quiet: true },
+          })
+        );
+      }
+    }
+
+    const eventCounts = new Map<string, number>();
+    for (const d of deletable) {
+      const ev = typeof d?.eventId === "string" ? d.eventId.trim() : "";
+      if (!ev || ev.toLowerCase() === "default") continue;
+      eventCounts.set(ev, (eventCounts.get(ev) ?? 0) + 1);
+    }
+
+    if (eventCounts.size > 0) {
+      const now = new Date().toISOString();
+
+      for (const [eventId, count] of eventCounts.entries()) {
+        const delta = -Math.abs(count);
+
+        await ddb.send(
+          new UpdateCommand({
+            TableName: table,
+            Key: { PK: "EVENT", SK: `EVENT#${eventId}` },
+            UpdateExpression: "ADD photoCount :d SET updatedAt = :now",
+            ExpressionAttributeValues: {
+              ":d": delta,
+              ":now": now,
+            },
           })
         );
       }
