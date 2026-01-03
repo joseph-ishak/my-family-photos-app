@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useProfile } from "../components/ProfileProvider";
+import { useProfile } from "../../components/ProfileProvider";
+import ContentFrame from "@/app/components/shell/ContentFrame";
 
 type Profile = {
   nickname: string;
@@ -131,7 +132,6 @@ export default function SettingsPage() {
       setAvatarFile(null);
       setSuccess("Saved");
 
-      // refresh navbar avatar immediately
       await refresh();
 
       if (updated.avatarUrl) {
@@ -159,108 +159,116 @@ export default function SettingsPage() {
   }
 
   if (loading) {
-    return <p className="p-8 text-center">Loading...</p>;
+    return (
+      <div className="min-h-[60vh] grid place-items-center">
+        <p className="text-sm text-neutral-500">Loading…</p>
+      </div>
+    );
   }
 
   return (
-    <div className="max-w-3xl mx-auto p-6 space-y-6">
-      <div className="bg-white rounded-2xl shadow-md p-6 space-y-2">
-        <h1 className="text-3xl font-bold text-gray-800">Account Settings</h1>
-        <p className="text-gray-600">
-          Update your nickname and profile picture.
-        </p>
-      </div>
+    <ContentFrame mode="readable">
+      <div className="space-y-6">
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 space-y-2">
+          <h1 className="text-2xl sm:text-3xl font-semibold">
+            Account settings
+          </h1>
+          <p className="text-sm text-neutral-300">
+            Update your nickname and profile picture.
+          </p>
+        </div>
 
-      <div className="bg-white rounded-2xl shadow-md p-6 space-y-6">
-        <div className="flex items-center gap-6">
-          <div className="w-20 h-20 rounded-full bg-gray-100 overflow-hidden flex items-center justify-center">
-            {avatarPreview ? (
-              <img
-                src={avatarPreview}
-                alt="Avatar"
-                className="w-full h-full object-cover"
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 space-y-6">
+          <div className="flex items-center gap-6">
+            <div className="w-20 h-20 rounded-full bg-neutral-800/40 overflow-hidden flex items-center justify-center border border-neutral-800">
+              {avatarPreview ? (
+                <img
+                  src={avatarPreview}
+                  alt="Avatar"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <span className="text-neutral-400 text-sm">No photo</span>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-neutral-200">
+                Profile picture
+              </label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => onPickAvatar(e.target.files?.[0] ?? null)}
+                className="block text-sm text-neutral-200"
               />
-            ) : (
-              <span className="text-gray-400 text-sm">No photo</span>
-            )}
+              <p className="text-xs text-neutral-400">
+                Use a square image. Keep it under 2 MB.
+              </p>
+            </div>
           </div>
 
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">
-              Profile picture
+            <label className="block text-sm font-medium text-neutral-200">
+              Nickname
             </label>
             <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => onPickAvatar(e.target.files?.[0] ?? null)}
-              className="block text-sm text-gray-700"
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-neutral-800 bg-neutral-950/40 focus:outline-none focus:ring-2 focus:ring-neutral-300"
+              maxLength={32}
             />
-            <p className="text-xs text-gray-500">
-              Use a square image. Keep it under 2 MB.
-            </p>
+          </div>
+
+          {error ? (
+            <div className="rounded-xl border border-red-900/40 bg-red-950/30 text-red-200 px-4 py-3 text-sm">
+              {error}
+            </div>
+          ) : null}
+
+          {success ? (
+            <div className="rounded-xl border border-emerald-900/40 bg-emerald-950/30 text-emerald-200 px-4 py-3 text-sm">
+              {success}
+            </div>
+          ) : null}
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="rounded-xl bg-neutral-50 text-neutral-900 px-6 py-3 font-medium hover:opacity-90 disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Save changes"}
+            </button>
+
+            <button
+              onClick={() => router.push("/home")}
+              className="rounded-xl border border-neutral-800 px-6 py-3 hover:bg-neutral-900 transition"
+            >
+              Back
+            </button>
           </div>
         </div>
 
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-gray-700">
-            Nickname
-          </label>
-          <input
-            value={nickname}
-            onChange={(e) => setNickname(e.target.value)}
-            className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            maxLength={32}
-          />
-        </div>
-
-        {error && (
-          <div className="rounded-lg bg-red-50 text-red-700 px-4 py-3 text-sm">
-            {error}
-          </div>
-        )}
-
-        {success && (
-          <div className="rounded-lg bg-green-50 text-green-700 px-4 py-3 text-sm">
-            {success}
-          </div>
-        )}
-
-        <div className="flex items-center gap-3">
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 space-y-3">
+          <h2 className="text-lg font-semibold">Sign out</h2>
+          <p className="text-sm text-neutral-300">
+            This removes your session from this device.
+          </p>
           <button
-            onClick={handleSave}
-            disabled={saving}
-            className="bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50"
+            onClick={async () => {
+              await fetch("/api/auth/logout", {
+                method: "POST",
+                credentials: "include",
+              });
+              router.replace("/login");
+            }}
+            className="rounded-xl border border-neutral-800 px-6 py-3 hover:bg-neutral-900 transition"
           >
-            {saving ? "Saving..." : "Save changes"}
-          </button>
-
-          <button
-            onClick={() => router.push("/home")}
-            className="px-6 py-3 rounded-lg border border-gray-300 hover:bg-gray-50"
-          >
-            Back
+            Sign out
           </button>
         </div>
       </div>
-
-      <div className="bg-white rounded-2xl shadow-md p-6 space-y-3">
-        <h2 className="text-xl font-semibold text-gray-800">Sign out</h2>
-        <p className="text-gray-600">
-          This removes your session from this device.
-        </p>
-        <button
-          onClick={async () => {
-            await fetch("/api/auth/logout", {
-              method: "POST",
-              credentials: "include",
-            });
-            router.replace("/login");
-          }}
-          className="px-6 py-3 rounded-lg border border-gray-300 hover:bg-gray-50"
-        >
-          Sign out
-        </button>
-      </div>
-    </div>
+    </ContentFrame>
   );
 }

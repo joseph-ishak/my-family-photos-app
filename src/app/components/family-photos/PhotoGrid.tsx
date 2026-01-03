@@ -1,4 +1,3 @@
-// src/app/components/family-photos/PhotoGrid.tsx
 "use client";
 
 import type { Photo } from "../../../types/photo";
@@ -24,7 +23,7 @@ export default function PhotoGrid({
   onUpdate,
 }: Props) {
   return (
-    <div className="grid gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-5 lg:gap-4 xl:grid-cols-6">
       {photos.map((photo) => {
         const canEdit = !!userSub && photo.ownerUserId === userSub;
         const isSelected = selectedKeys.includes(photo.key);
@@ -38,7 +37,6 @@ export default function PhotoGrid({
             onToggleSelect={(checked) => onSelectChange(photo.key, checked)}
             onOpen={() => onOpen(photo)}
             onDelete={async () => {
-              console.log("PhotoCard onDelete fired for", photo.key);
               await onDelete(photo.key);
             }}
             onUpdate={() => onUpdate(photo)}

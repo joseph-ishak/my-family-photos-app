@@ -89,9 +89,7 @@ export async function POST(req: NextRequest) {
     Key: s3Key,
     ContentType: filetype,
     ...(kind === "preview"
-      ? {
-          CacheControl: "public, max-age=31536000, immutable",
-        }
+      ? { CacheControl: "public, max-age=31536000, immutable" }
       : {}),
   });
 
@@ -133,7 +131,7 @@ export async function POST(req: NextRequest) {
       TableName: table,
       Key: { PK: "EVENT", SK: `EVENT#${eventName}` },
       UpdateExpression:
-        "ADD photoCount :one SET updatedAt = :now, createdAt = if_not_exists(createdAt, :now), #name = if_not_exists(#name, :name), eventId = if_not_exists(eventId, :eventId), coverKey = if_not_exists(coverKey, :coverKey)",
+        "ADD photoCount :one SET updatedAt = :now, createdAt = if_not_exists(createdAt, :now), #name = if_not_exists(#name, :name), eventId = if_not_exists(eventId, :eventId), coverKey = :coverKey",
       ExpressionAttributeNames: {
         "#name": "name",
       },

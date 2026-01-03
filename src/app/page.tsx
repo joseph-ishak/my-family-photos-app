@@ -1,5 +1,5 @@
 "use client";
-// src/app/page.tsx
+
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
@@ -34,5 +34,9 @@ export default function RootPage() {
     };
   }, [router]);
 
-  return <p className="p-8 text-center">Loading...</p>;
+  return (
+    <div className="min-h-[60vh] grid place-items-center">
+      <p className="text-sm text-neutral-500">Loading…</p>
+    </div>
+  );
 }

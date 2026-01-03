@@ -1,4 +1,3 @@
-// src/components/shell/AppShell.tsx
 "use client";
 
 import type { ReactNode } from "react";
@@ -11,13 +10,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-neutral-950 text-neutral-50">
       <TopBar />
 
-      <div className="mx-auto w-full max-w-[1600px] px-3 sm:px-4 lg:px-6">
-        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-4 lg:gap-6">
-          <div className="hidden lg:block">
+      <div className="mx-auto w-full max-w-[1800px] px-3 sm:px-4 lg:px-6">
+        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4 lg:gap-6">
+          <aside className="hidden lg:block">
             <SideNav />
-          </div>
+          </aside>
 
-          <main className="pb-20 lg:pb-6">{children}</main>
+          <main className="pb-20 lg:pb-8">{children}</main>
         </div>
       </div>
 
