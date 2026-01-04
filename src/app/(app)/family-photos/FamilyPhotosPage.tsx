@@ -1,5 +1,5 @@
 "use client";
-
+// src/app/%28app%29/family-photos/FamilyPhotosPage.tsx
 import { Suspense, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 

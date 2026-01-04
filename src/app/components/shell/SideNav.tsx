@@ -48,6 +48,34 @@ const CalendarIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
+const UsersIcon = ({ className }: { className?: string }) => (
+  <svg className={className || "h-5 w-5"} viewBox="0 0 24 24" fill="none">
+    <path
+      d="M16 21v-1.2c0-1.8-1.6-3.3-4-3.3s-4 1.5-4 3.3V21"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+    />
+    <path
+      d="M12 12.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+      stroke="currentColor"
+      strokeWidth="1.8"
+    />
+    <path
+      d="M20 21v-1.1c0-1.3-.8-2.4-2-2.9"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+    />
+    <path
+      d="M18 6.2a3 3 0 0 1 0 6"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
 const SettingsIcon = ({ className }: { className?: string }) => (
   <svg className={className || "h-5 w-5"} viewBox="0 0 24 24" fill="none">
     <path
@@ -68,6 +96,7 @@ const items: Item[] = [
   { label: "Home", href: "/home", icon: HomeIcon },
   { label: "Gallery", href: "/family-photos", icon: GridIcon },
   { label: "Events", href: "/events", icon: CalendarIcon },
+  { label: "Groups", href: "/groups", icon: UsersIcon },
   { label: "Settings", href: "/settings", icon: SettingsIcon },
 ];
 

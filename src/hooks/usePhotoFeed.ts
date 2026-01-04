@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteScroll } from "./useInfiniteScroll";
 
@@ -35,8 +33,15 @@ function isVideo(p: Photo) {
   return (p.mimeType ?? "").startsWith("video/");
 }
 
+function safeEventId(v: string) {
+  const s = (v ?? "").trim();
+  if (!s) return "";
+  if (s.toLowerCase() === "default") return "";
+  return s;
+}
+
 export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
-  const initialEvent = (initialEventFilter ?? "").trim();
+  const initialEvent = safeEventId(initialEventFilter ?? "");
 
   const [existingEvents, setExistingEvents] = useState<string[]>([]);
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -70,10 +75,10 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   }, []);
 
   const fetchPage = useCallback(
-    async (cursor?: string | null) => {
+    async (cursor?: string | null, serverEventId?: string) => {
       if (cursor === null) return;
 
-      const cursorKey = cursor ?? "__FIRST__";
+      const cursorKey = `${serverEventId || ""}::${cursor ?? "__FIRST__"}`;
       if (inFlightRef.current) return;
       if (fetchedCursorsRef.current.has(cursorKey)) return;
 
@@ -81,12 +86,12 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
       fetchedCursorsRef.current.add(cursorKey);
 
       try {
-        const url =
-          cursor && cursor.length > 0
-            ? `/api/photos?limit=${pageSize}&cursor=${encodeURIComponent(
-                cursor
-              )}`
-            : `/api/photos?limit=${pageSize}`;
+        const params = new URLSearchParams();
+        params.set("limit", String(pageSize));
+        if (cursor && cursor.length > 0) params.set("cursor", cursor);
+        if (serverEventId) params.set("eventId", serverEventId);
+
+        const url = `/api/photos?${params.toString()}`;
 
         const res = await fetch(url, {
           credentials: "include",
@@ -126,6 +131,12 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     [pageSize]
   );
 
+  const serverEventId = useMemo(() => {
+    const v = safeEventId(eventFilter);
+    if (!v) return "";
+    return existingEvents.includes(v) ? v : "";
+  }, [eventFilter, existingEvents]);
+
   useEffect(() => {
     setPhotos([]);
     setSelectedKeys([]);
@@ -133,16 +144,16 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     setNextCursor(null);
     fetchedCursorsRef.current.clear();
 
-    fetchPage(undefined);
+    fetchPage(undefined, serverEventId || undefined);
     refreshEvents();
-  }, [fetchPage, refreshEvents]);
+  }, [fetchPage, refreshEvents, serverEventId]);
 
   const loadMore = useCallback(() => {
     if (!hasMore) return;
     if (!nextCursor) return;
     if (inFlightRef.current) return;
-    fetchPage(nextCursor);
-  }, [fetchPage, hasMore, nextCursor]);
+    fetchPage(nextCursor, serverEventId || undefined);
+  }, [fetchPage, hasMore, nextCursor, serverEventId]);
 
   useInfiniteScroll({
     loaderRef,
@@ -259,9 +270,9 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     setHasMore(true);
     setNextCursor(null);
     fetchedCursorsRef.current.clear();
-    fetchPage(undefined);
+    fetchPage(undefined, serverEventId || undefined);
     refreshEvents();
-  }, [fetchPage, refreshEvents]);
+  }, [fetchPage, refreshEvents, serverEventId]);
 
   const updatePhotoUrl = useCallback((key: string, url: string) => {
     setPhotos((prev) => prev.map((p) => (p.key === key ? { ...p, url } : p)));

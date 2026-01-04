@@ -1,0 +1,152 @@
+// src/app/api/groups/[groupId]/members/route.ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  TransactWriteCommand,
+} from "@aws-sdk/lib-dynamodb";
+import { getVerifiedUser } from "@/lib/auth-server";
+
+const ddb = DynamoDBDocumentClient.from(
+  new DynamoDBClient({ region: "us-west-2" })
+);
+
+type GroupRole = "owner" | "admin" | "member";
+
+function asNonEmptyString(v: unknown) {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s.length > 0 ? s : null;
+}
+
+function normalizeRole(v: unknown): GroupRole {
+  const s = asNonEmptyString(v);
+  if (s === "owner" || s === "admin" || s === "member") return s;
+  return "member";
+}
+
+export async function POST(req: NextRequest, ctx: any) {
+  const user = await getVerifiedUser(req);
+  if (!user?.sub) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const params = await Promise.resolve(ctx?.params);
+  const groupId = decodeURIComponent(String(params?.groupId || "")).trim();
+  if (!groupId) {
+    return NextResponse.json({ error: "Missing groupId" }, { status: 400 });
+  }
+
+  const table = process.env.DYNAMO_TABLE_NAME!;
+  if (!table) {
+    return NextResponse.json(
+      { error: "Server config missing" },
+      { status: 500 }
+    );
+  }
+
+  const body = await req.json().catch(() => ({} as any));
+  const targetUserId = asNonEmptyString(body?.userId);
+  const role = normalizeRole(body?.role);
+
+  if (!targetUserId) {
+    return NextResponse.json({ error: "userId is required" }, { status: 400 });
+  }
+
+  if (role === "owner") {
+    return NextResponse.json(
+      { error: "Cannot assign owner role" },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const myMemberRes = await ddb.send(
+      new GetCommand({
+        TableName: table,
+        Key: { PK: `GROUP#${groupId}`, SK: `MEMBER#${user.sub}` },
+        ProjectionExpression: "userId, #role",
+        ExpressionAttributeNames: { "#role": "role" },
+      })
+    );
+
+    const myRole = normalizeRole((myMemberRes.Item as any)?.role);
+    if (!myMemberRes.Item || (myRole !== "owner" && myRole !== "admin")) {
+      return NextResponse.json(
+        { error: "Not allowed to manage members" },
+        { status: 403 }
+      );
+    }
+
+    const groupRes = await ddb.send(
+      new GetCommand({
+        TableName: table,
+        Key: { PK: "GROUP", SK: `GROUP#${groupId}` },
+        ProjectionExpression: "groupId, #name",
+        ExpressionAttributeNames: { "#name": "name" },
+      })
+    );
+
+    const groupItem = groupRes.Item as any;
+    if (!groupItem) {
+      return NextResponse.json({ error: "Group not found" }, { status: 404 });
+    }
+
+    const now = new Date().toISOString();
+    const groupName = asNonEmptyString(groupItem?.name) ?? groupId;
+
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: table,
+              Item: {
+                PK: `GROUP#${groupId}`,
+                SK: `MEMBER#${targetUserId}`,
+                groupId,
+                userId: targetUserId,
+                role,
+                createdAt: now,
+              },
+              ConditionExpression:
+                "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+            },
+          },
+          {
+            Put: {
+              TableName: table,
+              Item: {
+                PK: `USER#${targetUserId}`,
+                SK: `GROUP#${groupId}`,
+                groupId,
+                name: groupName,
+                role,
+                createdAt: now,
+              },
+              ConditionExpression:
+                "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+            },
+          },
+        ],
+      })
+    );
+
+    return NextResponse.json({ success: true }, { status: 201 });
+  } catch (err: any) {
+    const msg = String(err?.message || "");
+    if (msg.includes("ConditionalCheckFailed")) {
+      return NextResponse.json(
+        { error: "User is already a member" },
+        { status: 409 }
+      );
+    }
+
+    console.error("POST /api/groups/[groupId]/members error", err);
+    return NextResponse.json(
+      { error: err?.message || "Add member failed" },
+      { status: 500 }
+    );
+  }
+}

@@ -1,4 +1,3 @@
-// src/app/(app)/events/[eventId]/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -6,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import FamilyPhotosPage from "@/app/(app)/family-photos/FamilyPhotosPage";
 import ContentFrame from "@/app/components/shell/ContentFrame";
+import EventShareModal from "@/app/components/events/EventShareModal";
 
 type EventSummary = {
   eventId: string;
@@ -63,6 +63,8 @@ export default function EventDetailPage() {
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [event, setEvent] = useState<EventSummary | null>(null);
 
+  const [shareOpen, setShareOpen] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -107,6 +109,12 @@ export default function EventDetailPage() {
 
   return (
     <ContentFrame mode="media">
+      <EventShareModal
+        open={shareOpen}
+        eventId={eventId}
+        onClose={() => setShareOpen(false)}
+      />
+
       <div className="space-y-4 lg:space-y-6">
         <div className="rounded-3xl border border-neutral-900 bg-neutral-950/40 overflow-hidden">
           <div className="relative">
@@ -151,12 +159,21 @@ export default function EventDetailPage() {
                   </div>
                 </div>
 
-                <Link
-                  href={`/events/${encodeURIComponent(eventId)}?upload=1`}
-                  className="inline-flex items-center justify-center rounded-xl bg-neutral-50 px-4 py-3 text-sm font-medium text-neutral-900 hover:opacity-90 transition"
-                >
-                  Upload
-                </Link>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShareOpen(true)}
+                    className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-black/45 px-4 py-3 text-sm font-medium text-white/90 hover:bg-black/55 transition"
+                  >
+                    Share
+                  </button>
+
+                  <Link
+                    href={`/events/${encodeURIComponent(eventId)}?upload=1`}
+                    className="inline-flex items-center justify-center rounded-xl bg-neutral-50 px-4 py-3 text-sm font-medium text-neutral-900 hover:opacity-90 transition"
+                  >
+                    Upload
+                  </Link>
+                </div>
               </div>
             </div>
           </div>

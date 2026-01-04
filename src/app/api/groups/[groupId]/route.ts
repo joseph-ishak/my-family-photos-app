@@ -1,0 +1,227 @@
+// src/app/api/groups/[groupId]/route.ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  QueryCommand,
+  UpdateCommand,
+} from "@aws-sdk/lib-dynamodb";
+import { getVerifiedUser } from "@/lib/auth-server";
+
+const ddb = DynamoDBDocumentClient.from(
+  new DynamoDBClient({ region: "us-west-2" })
+);
+
+type GroupRole = "owner" | "admin" | "member";
+
+function asNonEmptyString(v: unknown) {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s.length > 0 ? s : null;
+}
+
+function normalizeRole(v: unknown): GroupRole {
+  const s = asNonEmptyString(v);
+  if (s === "owner" || s === "admin" || s === "member") return s;
+  return "member";
+}
+
+async function getMyMembership(table: string, groupId: string, userId: string) {
+  const res = await ddb.send(
+    new GetCommand({
+      TableName: table,
+      Key: { PK: `GROUP#${groupId}`, SK: `MEMBER#${userId}` },
+      ProjectionExpression: "userId, #role, createdAt",
+      ExpressionAttributeNames: { "#role": "role" },
+    })
+  );
+  return res.Item as any;
+}
+
+export async function GET(req: NextRequest, ctx: any) {
+  const user = await getVerifiedUser(req);
+  if (!user?.sub) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const params = await Promise.resolve(ctx?.params);
+  const groupId = decodeURIComponent(String(params?.groupId || "")).trim();
+  if (!groupId) {
+    return NextResponse.json({ error: "Missing groupId" }, { status: 400 });
+  }
+
+  const table = process.env.DYNAMO_TABLE_NAME!;
+  if (!table) {
+    return NextResponse.json(
+      { error: "Server config missing" },
+      { status: 500 }
+    );
+  }
+
+  try {
+    const membership = await getMyMembership(table, groupId, user.sub);
+    if (!membership) {
+      return NextResponse.json({ error: "Not a member" }, { status: 403 });
+    }
+
+    const groupRes = await ddb.send(
+      new GetCommand({
+        TableName: table,
+        Key: { PK: "GROUP", SK: `GROUP#${groupId}` },
+        ProjectionExpression:
+          "groupId, #name, ownerUserId, createdAt, updatedAt, SK",
+        ExpressionAttributeNames: { "#name": "name" },
+      })
+    );
+
+    const groupItem = groupRes.Item as any;
+    if (!groupItem) {
+      return NextResponse.json({ error: "Group not found" }, { status: 404 });
+    }
+
+    const membersRes = await ddb.send(
+      new QueryCommand({
+        TableName: table,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+        ExpressionAttributeValues: {
+          ":pk": `GROUP#${groupId}`,
+          ":prefix": "MEMBER#",
+        },
+        ProjectionExpression: "userId, #role, createdAt, SK",
+        ExpressionAttributeNames: { "#role": "role" },
+      })
+    );
+
+    const membersRaw = (membersRes.Items ?? []) as any[];
+
+    const members = membersRaw
+      .map((m) => {
+        const userId =
+          asNonEmptyString(m?.userId) ??
+          (typeof m?.SK === "string" ? m.SK.replace(/^MEMBER#/, "") : null);
+
+        if (!userId) return null;
+
+        return {
+          userId,
+          role: normalizeRole(m?.role),
+          createdAt: typeof m?.createdAt === "string" ? m.createdAt : null,
+        };
+      })
+      .filter(Boolean);
+
+    const group = {
+      groupId,
+      name: asNonEmptyString(groupItem?.name) ?? groupId,
+      role: normalizeRole(membership?.role),
+      createdAt:
+        typeof groupItem?.createdAt === "string" ? groupItem.createdAt : null,
+      updatedAt:
+        typeof groupItem?.updatedAt === "string" ? groupItem.updatedAt : null,
+      ownerUserId: asNonEmptyString(groupItem?.ownerUserId),
+    };
+
+    return NextResponse.json({ group, members });
+  } catch (err: any) {
+    console.error("GET /api/groups/[groupId] error", err);
+    return NextResponse.json(
+      { error: err?.message || "Failed to load group" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PUT(req: NextRequest, ctx: any) {
+  const user = await getVerifiedUser(req);
+  if (!user?.sub) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const params = await Promise.resolve(ctx?.params);
+  const groupId = decodeURIComponent(String(params?.groupId || "")).trim();
+  if (!groupId) {
+    return NextResponse.json({ error: "Missing groupId" }, { status: 400 });
+  }
+
+  const table = process.env.DYNAMO_TABLE_NAME!;
+  if (!table) {
+    return NextResponse.json(
+      { error: "Server config missing" },
+      { status: 500 }
+    );
+  }
+
+  const body = await req.json().catch(() => ({} as any));
+  const name = asNonEmptyString(body?.name);
+
+  if (!name) {
+    return NextResponse.json({ error: "name is required" }, { status: 400 });
+  }
+
+  try {
+    const membership = await getMyMembership(table, groupId, user.sub);
+    const myRole = normalizeRole(membership?.role);
+    if (!membership || myRole !== "owner") {
+      return NextResponse.json(
+        { error: "Only the owner can rename the group" },
+        { status: 403 }
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: table,
+        Key: { PK: "GROUP", SK: `GROUP#${groupId}` },
+        UpdateExpression: "SET #name = :n, updatedAt = :now",
+        ExpressionAttributeNames: { "#name": "name" },
+        ExpressionAttributeValues: {
+          ":n": name,
+          ":now": now,
+        },
+      })
+    );
+
+    const membersRes = await ddb.send(
+      new QueryCommand({
+        TableName: table,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+        ExpressionAttributeValues: {
+          ":pk": `GROUP#${groupId}`,
+          ":prefix": "MEMBER#",
+        },
+        ProjectionExpression: "userId, SK",
+      })
+    );
+
+    const membersRaw = (membersRes.Items ?? []) as any[];
+
+    for (const m of membersRaw) {
+      const userId =
+        asNonEmptyString(m?.userId) ??
+        (typeof m?.SK === "string" ? m.SK.replace(/^MEMBER#/, "") : null);
+
+      if (!userId) continue;
+
+      await ddb.send(
+        new UpdateCommand({
+          TableName: table,
+          Key: { PK: `USER#${userId}`, SK: `GROUP#${groupId}` },
+          UpdateExpression: "SET #name = :n",
+          ExpressionAttributeNames: { "#name": "name" },
+          ExpressionAttributeValues: { ":n": name },
+        })
+      );
+    }
+
+    return NextResponse.json({ success: true, groupId, name, updatedAt: now });
+  } catch (err: any) {
+    console.error("PUT /api/groups/[groupId] error", err);
+    return NextResponse.json(
+      { error: err?.message || "Rename failed" },
+      { status: 500 }
+    );
+  }
+}

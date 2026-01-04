@@ -6,6 +6,7 @@ import { useProfile, initials } from "../ProfileProvider";
 function titleForPath(path: string) {
   if (path.startsWith("/family-photos")) return "Gallery";
   if (path.startsWith("/events")) return "Events";
+  if (path.startsWith("/groups")) return "Groups";
   if (path.startsWith("/settings")) return "Settings";
   if (path.startsWith("/home")) return "Home";
   return "Family Photos";

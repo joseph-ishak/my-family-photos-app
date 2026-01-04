@@ -1,3 +1,4 @@
+// src/app/api/upload-url/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -131,7 +132,7 @@ export async function POST(req: NextRequest) {
       TableName: table,
       Key: { PK: "EVENT", SK: `EVENT#${eventName}` },
       UpdateExpression:
-        "ADD photoCount :one SET updatedAt = :now, createdAt = if_not_exists(createdAt, :now), #name = if_not_exists(#name, :name), eventId = if_not_exists(eventId, :eventId), coverKey = :coverKey",
+        "ADD photoCount :one SET updatedAt = :now, createdAt = if_not_exists(createdAt, :now), #name = if_not_exists(#name, :name), eventId = if_not_exists(eventId, :eventId), coverKey = :coverKey, ownerUserId = if_not_exists(ownerUserId, :owner)",
       ExpressionAttributeNames: {
         "#name": "name",
       },
@@ -141,6 +142,7 @@ export async function POST(req: NextRequest) {
         ":name": eventName,
         ":eventId": eventName,
         ":coverKey": coverKey,
+        ":owner": user.sub,
       },
     })
   );

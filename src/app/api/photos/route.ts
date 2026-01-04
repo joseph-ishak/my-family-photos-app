@@ -1,10 +1,12 @@
+// src/app/api/photos/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
+  BatchGetCommand,
   DynamoDBDocumentClient,
   QueryCommand,
-  BatchGetCommand,
+  BatchGetCommandInput,
   TransactWriteCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
@@ -36,6 +38,11 @@ function chunk<T>(arr: T[], size: number) {
   return out;
 }
 
+function asNonEmptyString(v: unknown) {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s.length > 0 ? s : null;
+}
+
 async function signGetUrl(key?: string) {
   if (!key) return undefined;
   return await getSignedUrl(
@@ -61,39 +68,162 @@ function previewUrlForKey(key: string) {
   return new URL(rel, base.endsWith("/") ? base : base + "/").toString();
 }
 
+async function getUserGroupIds(
+  table: string,
+  userSub: string
+): Promise<string[]> {
+  const res = await ddb.send(
+    new QueryCommand({
+      TableName: table,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+      ExpressionAttributeValues: {
+        ":pk": `USER#${userSub}`,
+        ":skPrefix": "GROUP#",
+      },
+      ProjectionExpression: "groupId, SK",
+    })
+  );
+
+  const items = (res.Items ?? []) as any[];
+
+  const groupIds = items
+    .map((it) => {
+      const gid = asNonEmptyString(it?.groupId);
+      if (gid) return gid;
+      const sk = asNonEmptyString(it?.SK);
+      if (!sk) return null;
+      return sk.replace(/^GROUP#/, "");
+    })
+    .filter(Boolean) as string[];
+
+  return Array.from(new Set(groupIds));
+}
+
+async function getSharedEventIdsForGroups(
+  table: string,
+  groupIds: string[]
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (groupIds.length === 0) return out;
+
+  for (const groupId of groupIds) {
+    const res = await ddb.send(
+      new QueryCommand({
+        TableName: table,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+        ExpressionAttributeValues: {
+          ":pk": `GROUP#${groupId}`,
+          ":skPrefix": "SHARE#EVENT#",
+        },
+        ProjectionExpression: "eventId, SK",
+      })
+    );
+
+    const items = (res.Items ?? []) as any[];
+    for (const it of items) {
+      const eid = asNonEmptyString(it?.eventId);
+      if (eid) {
+        out.add(eid);
+        continue;
+      }
+      const sk = asNonEmptyString(it?.SK);
+      if (sk && sk.startsWith("SHARE#EVENT#")) {
+        out.add(sk.replace(/^SHARE#EVENT#/, ""));
+      }
+    }
+  }
+
+  return out;
+}
+
 export async function GET(req: NextRequest) {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const table = process.env.DYNAMO_TABLE_NAME!;
+  if (!table) {
+    return NextResponse.json(
+      { error: "Server config missing" },
+      { status: 500 }
+    );
+  }
+
   const { searchParams } = new URL(req.url);
   const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 50);
   const cursor = searchParams.get("cursor");
 
-  const ExclusiveStartKey = cursor
+  let ExclusiveStartKey = cursor
     ? JSON.parse(Buffer.from(cursor, "base64").toString("utf8"))
     : undefined;
 
   try {
-    const result = await ddb.send(
-      new QueryCommand({
-        TableName: process.env.DYNAMO_TABLE_NAME!,
-        IndexName: "GSI1",
-        KeyConditionExpression: "GSI1PK = :pk",
-        ExpressionAttributeValues: {
-          ":pk": "PHOTO",
-        },
-        Limit: limit,
-        ScanIndexForward: false,
-        ExclusiveStartKey,
-        ProjectionExpression:
-          "PK, SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
-      })
-    );
+    const groupIds = await getUserGroupIds(table, user.sub);
+
+    const visible: any[] = [];
+    let lastEvaluated: any = null;
+
+    while (visible.length < limit) {
+      const result = await ddb.send(
+        new QueryCommand({
+          TableName: table,
+          IndexName: "GSI1",
+          KeyConditionExpression: "GSI1PK = :pk",
+          ExpressionAttributeValues: {
+            ":pk": "PHOTO",
+          },
+          Limit: Math.min(50, limit * 3),
+          ScanIndexForward: false,
+          ExclusiveStartKey,
+          ProjectionExpression:
+            "PK, SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
+        })
+      );
+
+      const items = (result.Items ?? []) as any[];
+      lastEvaluated = result.LastEvaluatedKey ?? null;
+      ExclusiveStartKey = result.LastEvaluatedKey ?? undefined;
+
+      if (items.length === 0) break;
+
+      const owned = items.filter(
+        (it) => asNonEmptyString(it?.ownerUserId) === user.sub
+      );
+      const notOwned = items.filter(
+        (it) => asNonEmptyString(it?.ownerUserId) !== user.sub
+      );
+
+      const eventIdsToCheck = Array.from(
+        new Set(
+          notOwned
+            .map((it) => asNonEmptyString(it?.eventId))
+            .filter(Boolean)
+            .filter((eid) => String(eid).toLowerCase() !== "default")
+        )
+      ) as string[];
+
+      const sharedEvents = await getSharedEventIdsForGroups(table, groupIds);
+
+      const allowedNotOwned = notOwned.filter((it) => {
+        const eid = asNonEmptyString(it?.eventId);
+        if (!eid) return false;
+        if (eid.toLowerCase() === "default") return false;
+        return sharedEvents.has(eid);
+      });
+
+      const allowed = [...owned, ...allowedNotOwned];
+
+      for (const it of allowed) {
+        if (visible.length >= limit) break;
+        visible.push(it);
+      }
+
+      if (!ExclusiveStartKey) break;
+    }
 
     const photos = await Promise.all(
-      (result.Items || []).map(async (item: any) => {
+      visible.map(async (item: any) => {
         const url = await signGetUrl(item.s3Key);
 
         const thumbnailUrl = item.thumbnailKey
@@ -126,10 +256,8 @@ export async function GET(req: NextRequest) {
       })
     );
 
-    const nextCursor = result.LastEvaluatedKey
-      ? Buffer.from(JSON.stringify(result.LastEvaluatedKey), "utf8").toString(
-          "base64"
-        )
+    const nextCursor = lastEvaluated
+      ? Buffer.from(JSON.stringify(lastEvaluated), "utf8").toString("base64")
       : null;
 
     return NextResponse.json({ photos, nextCursor });
@@ -165,12 +293,6 @@ export async function DELETE(req: NextRequest) {
       }
     }
 
-    console.log("DELETE /api/photos received", {
-      userSub: user.sub,
-      itemsCount: items.length,
-      sample: items[0],
-    });
-
     if (!Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: "No items provided" }, { status: 400 });
     }
@@ -204,10 +326,6 @@ export async function DELETE(req: NextRequest) {
       const found = got.Responses?.[table] ?? [];
       foundAll.push(...found);
     }
-
-    console.log("DELETE /api/photos batchGet found", {
-      foundCount: foundAll.length,
-    });
 
     const deletable = foundAll.filter((x: any) => x.ownerUserId === user.sub);
 

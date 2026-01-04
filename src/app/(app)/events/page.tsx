@@ -8,6 +8,7 @@ import EventsGrid, {
 import EmptyState, { EmptyStateIcon } from "@/app/components/ui/EmptyState";
 import PhotoUploadModal from "@/app/components/PhotoUploadModal";
 import { useProfile } from "@/app/components/ProfileProvider";
+import EventShareModal from "@/app/components/events/EventShareModal";
 
 type ApiEventsResponse = {
   events?: string[];
@@ -26,6 +27,9 @@ export default function EventsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [summaries, setSummaries] = useState<EventSummary[]>([]);
+
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareEventId, setShareEventId] = useState("");
 
   const refresh = async () => {
     setLoading(true);
@@ -54,8 +58,22 @@ export default function EventsPage() {
 
   const isEmpty = !loading && summaries.length === 0;
 
+  const openShare = (eventId: string) => {
+    setShareEventId(eventId);
+    setShareOpen(true);
+  };
+
   return (
     <div className="space-y-4 lg:space-y-6">
+      <EventShareModal
+        open={shareOpen}
+        eventId={shareEventId}
+        onClose={() => {
+          setShareOpen(false);
+          setShareEventId("");
+        }}
+      />
+
       <div className="flex items-center justify-between gap-3">
         <div className="text-lg font-semibold text-white/90">Events</div>
         <button
@@ -92,7 +110,7 @@ export default function EventsPage() {
           Loading events
         </div>
       ) : (
-        <EventsGrid summaries={summaries} />
+        <EventsGrid summaries={summaries} onShare={openShare} />
       )}
     </div>
   );

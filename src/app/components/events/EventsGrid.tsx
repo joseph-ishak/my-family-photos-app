@@ -1,3 +1,4 @@
+// src/app/components/events/EventsGrid.tsx
 "use client";
 
 import Link from "next/link";
@@ -37,10 +38,11 @@ function buildCoverUrl(coverKey: string | null) {
 
 export default function EventsGrid({
   summaries,
+  onShare,
 }: {
   summaries: EventSummary[];
+  onShare?: (eventId: string) => void;
 }) {
-  console.log("CF_BASE", CF_BASE);
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4 lg:gap-4 xl:grid-cols-5">
       {summaries.map((ev) => {
@@ -64,6 +66,22 @@ export default function EventsGrid({
               ) : (
                 <div className="h-full w-full" />
               )}
+
+              {onShare ? (
+                <div className="absolute right-2 top-2">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onShare(ev.eventId);
+                    }}
+                    className="rounded-xl border border-white/15 bg-black/45 px-3 py-2 text-xs text-white/90 hover:bg-black/55 transition"
+                  >
+                    Share
+                  </button>
+                </div>
+              ) : null}
 
               <div className="pointer-events-none absolute inset-x-0 bottom-0">
                 <div className="bg-gradient-to-t from-black/70 via-black/10 to-transparent px-3 pb-3 pt-10">
