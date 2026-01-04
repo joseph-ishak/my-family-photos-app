@@ -6,9 +6,9 @@ import {
   BatchGetCommand,
   DynamoDBDocumentClient,
   QueryCommand,
-  BatchGetCommandInput,
   TransactWriteCommand,
   UpdateCommand,
+  GetCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
   S3Client,
@@ -43,6 +43,27 @@ function asNonEmptyString(v: unknown) {
   return s.length > 0 ? s : null;
 }
 
+function normalizeEventId(raw: unknown): string | null {
+  const v = typeof raw === "string" ? raw.trim() : "";
+  if (!v) return null;
+  if (v.toLowerCase() === "default") return null;
+  return v;
+}
+
+function decodeCursor(cursor: string | null) {
+  if (!cursor) return undefined;
+  try {
+    return JSON.parse(Buffer.from(cursor, "base64").toString("utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function encodeCursor(lastEvaluated: any) {
+  if (!lastEvaluated) return null;
+  return Buffer.from(JSON.stringify(lastEvaluated), "utf8").toString("base64");
+}
+
 async function signGetUrl(key?: string) {
   if (!key) return undefined;
   return await getSignedUrl(
@@ -66,6 +87,16 @@ function previewUrlForKey(key: string) {
   if (!base) throw new Error("Missing PREVIEWS_CDN_URL");
   const rel = toPreviewPath(key);
   return new URL(rel, base.endsWith("/") ? base : base + "/").toString();
+}
+
+function inferMediaType(item: any): "photo" | "video" {
+  const mt = asNonEmptyString(item?.mediaType);
+  if (mt === "video") return "video";
+  if (mt === "photo") return "photo";
+
+  const mime = asNonEmptyString(item?.mimeType) ?? "";
+  if (mime.startsWith("video/")) return "video";
+  return "photo";
 }
 
 async function getUserGroupIds(
@@ -99,37 +130,48 @@ async function getUserGroupIds(
   return Array.from(new Set(groupIds));
 }
 
-async function getSharedEventIdsForGroups(
+async function getSharedEventIdsForUserGroups(
   table: string,
+  eventIds: string[],
   groupIds: string[]
 ): Promise<Set<string>> {
   const out = new Set<string>();
+  if (eventIds.length === 0) return out;
   if (groupIds.length === 0) return out;
 
-  for (const groupId of groupIds) {
-    const res = await ddb.send(
-      new QueryCommand({
-        TableName: table,
-        KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
-        ExpressionAttributeValues: {
-          ":pk": `GROUP#${groupId}`,
-          ":skPrefix": "SHARE#EVENT#",
+  const keys: { PK: string; SK: string }[] = [];
+  for (const eventId of eventIds) {
+    for (const groupId of groupIds) {
+      keys.push({
+        PK: `EVENT#${eventId}`,
+        SK: `SHARE#GROUP#${groupId}`,
+      });
+    }
+  }
+
+  const chunks = chunk(keys, 100);
+
+  for (const c of chunks) {
+    const got = await ddb.send(
+      new BatchGetCommand({
+        RequestItems: {
+          [table]: {
+            Keys: c,
+            ProjectionExpression: "eventId, PK",
+          },
         },
-        ProjectionExpression: "eventId, SK",
       })
     );
 
-    const items = (res.Items ?? []) as any[];
-    for (const it of items) {
+    const found = got.Responses?.[table] ?? [];
+    for (const it of found as any[]) {
       const eid = asNonEmptyString(it?.eventId);
       if (eid) {
         out.add(eid);
         continue;
       }
-      const sk = asNonEmptyString(it?.SK);
-      if (sk && sk.startsWith("SHARE#EVENT#")) {
-        out.add(sk.replace(/^SHARE#EVENT#/, ""));
-      }
+      const pk = asNonEmptyString(it?.PK);
+      if (pk && pk.startsWith("EVENT#")) out.add(pk.replace(/^EVENT#/, ""));
     }
   }
 
@@ -153,27 +195,50 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 50);
   const cursor = searchParams.get("cursor");
+  const requestedEventId = normalizeEventId(searchParams.get("eventId"));
 
-  let ExclusiveStartKey = cursor
-    ? JSON.parse(Buffer.from(cursor, "base64").toString("utf8"))
-    : undefined;
+  const ExclusiveStartKey = decodeCursor(cursor);
 
   try {
     const groupIds = await getUserGroupIds(table, user.sub);
 
-    const visible: any[] = [];
-    let lastEvaluated: any = null;
+    if (requestedEventId) {
+      const ownerRes = await ddb.send(
+        new GetCommand({
+          TableName: table,
+          Key: { PK: "EVENT", SK: `EVENT#${requestedEventId}` },
+          ProjectionExpression: "ownerUserId",
+        })
+      );
 
-    while (visible.length < limit) {
+      const ownerUserId = asNonEmptyString((ownerRes.Item as any)?.ownerUserId);
+      const isOwner = ownerUserId === user.sub;
+
+      const sharedSet = await getSharedEventIdsForUserGroups(
+        table,
+        [requestedEventId],
+        groupIds
+      );
+      const isShared = sharedSet.has(requestedEventId);
+
+      if (!isOwner && !isShared) {
+        return NextResponse.json(
+          { photos: [], nextCursor: null },
+          { status: 403 }
+        );
+      }
+
+      const pk = `EVENT#${requestedEventId}`;
+
       const result = await ddb.send(
         new QueryCommand({
           TableName: table,
-          IndexName: "GSI1",
-          KeyConditionExpression: "GSI1PK = :pk",
+          KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
           ExpressionAttributeValues: {
-            ":pk": "PHOTO",
+            ":pk": pk,
+            ":skPrefix": "MEDIA#",
           },
-          Limit: Math.min(50, limit * 3),
+          Limit: limit,
           ScanIndexForward: false,
           ExclusiveStartKey,
           ProjectionExpression:
@@ -182,45 +247,96 @@ export async function GET(req: NextRequest) {
       );
 
       const items = (result.Items ?? []) as any[];
-      lastEvaluated = result.LastEvaluatedKey ?? null;
-      ExclusiveStartKey = result.LastEvaluatedKey ?? undefined;
+      const lastEvaluated = result.LastEvaluatedKey ?? null;
 
-      if (items.length === 0) break;
+      const photos = await Promise.all(
+        items.map(async (item: any) => {
+          const url = await signGetUrl(item.s3Key);
 
-      const owned = items.filter(
-        (it) => asNonEmptyString(it?.ownerUserId) === user.sub
+          const thumbnailUrl = item.thumbnailKey
+            ? previewUrlForKey(item.thumbnailKey)
+            : item.s3Key
+            ? previewUrlForKey(item.s3Key)
+            : undefined;
+
+          return {
+            key: item.s3Key,
+            s3Key: item.s3Key,
+            thumbnailKey: item.thumbnailKey,
+            thumbnailUrl,
+            mimeType: item.mimeType,
+            mediaType: inferMediaType(item),
+            url,
+            eventId: item.eventId,
+            takenAt: item.takenAt,
+            ownerUserId: item.ownerUserId,
+            pk: item.PK,
+            sk: item.SK,
+          };
+        })
       );
-      const notOwned = items.filter(
-        (it) => asNonEmptyString(it?.ownerUserId) !== user.sub
-      );
 
-      const eventIdsToCheck = Array.from(
-        new Set(
-          notOwned
-            .map((it) => asNonEmptyString(it?.eventId))
-            .filter(Boolean)
-            .filter((eid) => String(eid).toLowerCase() !== "default")
-        )
-      ) as string[];
-
-      const sharedEvents = await getSharedEventIdsForGroups(table, groupIds);
-
-      const allowedNotOwned = notOwned.filter((it) => {
-        const eid = asNonEmptyString(it?.eventId);
-        if (!eid) return false;
-        if (eid.toLowerCase() === "default") return false;
-        return sharedEvents.has(eid);
+      return NextResponse.json({
+        photos,
+        nextCursor: encodeCursor(lastEvaluated),
       });
-
-      const allowed = [...owned, ...allowedNotOwned];
-
-      for (const it of allowed) {
-        if (visible.length >= limit) break;
-        visible.push(it);
-      }
-
-      if (!ExclusiveStartKey) break;
     }
+
+    // Global feed, one page of the GSI per request.
+    // Important: nextCursor is always derived from DynamoDB LastEvaluatedKey,
+    // even if this page yields few visible photos after filtering.
+    const gsiRes = await ddb.send(
+      new QueryCommand({
+        TableName: table,
+        IndexName: "GSI1",
+        KeyConditionExpression: "GSI1PK = :pk",
+        ExpressionAttributeValues: {
+          ":pk": "PHOTO",
+        },
+        Limit: limit,
+        ScanIndexForward: false,
+        ExclusiveStartKey,
+        ProjectionExpression:
+          "PK, SK, GSI1PK, GSI1SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
+      })
+    );
+
+    const gsiItems = (gsiRes.Items ?? []) as any[];
+    const lastEvaluated = gsiRes.LastEvaluatedKey ?? null;
+
+    console.log("[api/photos] gsi page", {
+      requestedLimit: limit,
+      returnedItems: gsiItems.length,
+      hasLastEvaluatedKey: Boolean(lastEvaluated),
+    });
+
+    const owned = gsiItems.filter(
+      (it) => asNonEmptyString(it?.ownerUserId) === user.sub
+    );
+
+    const notOwned = gsiItems.filter(
+      (it) => asNonEmptyString(it?.ownerUserId) !== user.sub
+    );
+
+    const candidateEventIds = Array.from(
+      new Set(
+        notOwned.map((it) => normalizeEventId(it?.eventId)).filter(Boolean)
+      )
+    ) as string[];
+
+    const sharedEvents = await getSharedEventIdsForUserGroups(
+      table,
+      candidateEventIds,
+      groupIds
+    );
+
+    const allowedNotOwned = notOwned.filter((it) => {
+      const eid = normalizeEventId(it?.eventId);
+      if (!eid) return false;
+      return sharedEvents.has(eid);
+    });
+
+    const visible = [...owned, ...allowedNotOwned];
 
     const photos = await Promise.all(
       visible.map(async (item: any) => {
@@ -232,20 +348,13 @@ export async function GET(req: NextRequest) {
           ? previewUrlForKey(item.s3Key)
           : undefined;
 
-        const inferredMediaType =
-          item.mediaType ??
-          (typeof item.mimeType === "string" &&
-          item.mimeType.startsWith("video/")
-            ? "video"
-            : "photo");
-
         return {
           key: item.s3Key,
           s3Key: item.s3Key,
           thumbnailKey: item.thumbnailKey,
           thumbnailUrl,
           mimeType: item.mimeType,
-          mediaType: inferredMediaType,
+          mediaType: inferMediaType(item),
           url,
           eventId: item.eventId,
           takenAt: item.takenAt,
@@ -256,11 +365,10 @@ export async function GET(req: NextRequest) {
       })
     );
 
-    const nextCursor = lastEvaluated
-      ? Buffer.from(JSON.stringify(lastEvaluated), "utf8").toString("base64")
-      : null;
-
-    return NextResponse.json({ photos, nextCursor });
+    return NextResponse.json({
+      photos,
+      nextCursor: encodeCursor(lastEvaluated),
+    });
   } catch (err) {
     console.error("Error fetching photos:", err);
     return NextResponse.json({ photos: [] }, { status: 500 });

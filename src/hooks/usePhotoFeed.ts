@@ -1,3 +1,4 @@
+// src/hooks/usePhotoFeed.ts
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteScroll } from "./useInfiniteScroll";
 
@@ -46,6 +47,8 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   const [existingEvents, setExistingEvents] = useState<string[]>([]);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+
+  // hasMore means we have a cursor and should keep trying
   const [hasMore, setHasMore] = useState(true);
 
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
@@ -67,8 +70,23 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     try {
       const r = await fetch("/api/events", { credentials: "include" });
       const d = await r.json().catch(() => ({}));
-      const list = Array.isArray(d?.events) ? d.events : [];
-      setExistingEvents(list);
+
+      const summaries = Array.isArray(d?.summaries) ? d.summaries : [];
+      const idsFromSummaries = summaries
+        .map((e: any) =>
+          typeof e?.eventId === "string" ? e.eventId.trim() : ""
+        )
+        .filter(Boolean) as string[];
+
+      const events = Array.isArray(d?.events) ? d.events : [];
+      const idsFromEvents = events
+        .map((v: any) => (typeof v === "string" ? v.trim() : ""))
+        .filter(Boolean) as string[];
+
+      const merged = Array.from(
+        new Set([...idsFromSummaries, ...idsFromEvents])
+      );
+      setExistingEvents(merged);
     } catch (e) {
       console.error("Failed to refresh events", e);
     }
@@ -101,7 +119,11 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
         if (!res.ok) {
           const text = await res.text().catch(() => "");
           console.error("GET /api/photos failed", res.status, text);
-          throw new Error(`Failed to fetch photos: ${res.status} ${text}`);
+
+          // Important change:
+          // Do not permanently disable infinite scroll on one failure.
+          // Allow user to scroll again and retry.
+          return;
         }
 
         const data = (await res.json()) as ApiPhotosResponse;
@@ -119,11 +141,22 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
         });
 
         setNextCursor(data.nextCursor ?? null);
-        const more = Boolean(data.nextCursor) && (data.photos?.length ?? 0) > 0;
-        setHasMore(more);
+
+        // Critical:
+        // Keep trying as long as cursor exists.
+        setHasMore(Boolean(data.nextCursor));
+
+        // Debug
+        console.log("[usePhotosFeed] fetched", {
+          serverEventId: serverEventId || "",
+          got: (data.photos ?? []).length,
+          nextCursor: data.nextCursor,
+        });
       } catch (err) {
         console.error(err);
-        setHasMore(false);
+
+        // Same rule: do not hard stop pagination here.
+        // Keep hasMore as is so the observer can retry.
       } finally {
         inFlightRef.current = false;
       }
@@ -136,6 +169,14 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     if (!v) return "";
     return existingEvents.includes(v) ? v : "";
   }, [eventFilter, existingEvents]);
+
+  useEffect(() => {
+    const next = safeEventId(initialEventFilter ?? "");
+    setEventFilter(next);
+    setDateFilter("");
+    setSelectedKeys([]);
+    setExpandedPhoto(null);
+  }, [initialEventFilter]);
 
   useEffect(() => {
     setPhotos([]);
@@ -163,11 +204,11 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   });
 
   const filteredPhotos = useMemo(() => {
+    const ef = safeEventId(eventFilter).toLowerCase();
+
     return photos
       .filter((p) =>
-        eventFilter
-          ? (p.eventId ?? "").toLowerCase().includes(eventFilter.toLowerCase())
-          : true
+        ef ? safeEventId(p.eventId ?? "").toLowerCase() === ef : true
       )
       .filter((p) =>
         dateFilter ? (p.takenAt ?? "").startsWith(dateFilter) : true
@@ -287,6 +328,7 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
         alert("Video editing is not supported yet.");
         return;
       }
+
       const pk = photo.pk;
       const sk = photo.sk;
       const s3Key = photo.s3Key || photo.key;

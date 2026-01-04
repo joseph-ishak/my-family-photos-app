@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
           KeyConditionExpression: "pk = :pk AND begins_with(sk, :photoPrefix)",
           ExpressionAttributeValues: {
             ":pk": `EVENT#${eventId}`,
-            ":photoPrefix": "PHOTO#",
+            ":photoPrefix": "MEDIA#",
           },
           ScanIndexForward: false,
           Limit: 1,

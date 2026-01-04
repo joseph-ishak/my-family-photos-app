@@ -58,8 +58,8 @@ const ArrowLeft = () => (
 
 export default function EventDetailPage() {
   const params = useParams();
-  const eventId = typeof params?.eventId === "string" ? params.eventId : "";
-
+  const raw = typeof params?.eventId === "string" ? params.eventId : "";
+  const eventId = raw ? decodeURIComponent(raw).trim() : "";
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [event, setEvent] = useState<EventSummary | null>(null);
 
