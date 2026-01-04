@@ -1,3 +1,4 @@
+// src/app/(app)/home/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -13,34 +14,55 @@ type Photo = {
 
 export default function HomePage() {
   const router = useRouter();
+  const { loading: profileLoading, isAuthed, profile } = useProfile();
+
   const [loading, setLoading] = useState(true);
   const [recentPhotos, setRecentPhotos] = useState<Photo[]>([]);
-  const profile = useProfile();
 
   useEffect(() => {
-    async function fetchUserAndPhotos() {
+    if (profileLoading) return;
+
+    if (!isAuthed) {
+      router.replace("/login");
+      return;
+    }
+
+    if (profile?.profileComplete === false) {
+      router.replace("/settings?setup=1&next=%2Fhome");
+      return;
+    }
+
+    let cancelled = false;
+
+    async function fetchPhotos() {
+      setLoading(true);
       try {
-        const resUser = await fetch("/api/auth/me");
-        const userData = await resUser.json();
-        if (!userData.user) {
-          router.push("/login");
-          return;
+        const resPhotos = await fetch("/api/photos?limit=4", {
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        if (!resPhotos.ok) {
+          throw new Error("Failed to load photos");
         }
 
-        const resPhotos = await fetch("/api/photos?limit=4");
         const photosData = await resPhotos.json();
-        setRecentPhotos(photosData.photos || []);
-      } catch (err) {
-        console.error(err);
+        if (!cancelled) setRecentPhotos(photosData.photos || []);
+      } catch {
+        if (!cancelled) setRecentPhotos([]);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
-    fetchUserAndPhotos();
-  }, [router]);
+    fetchPhotos();
 
-  if (loading) {
+    return () => {
+      cancelled = true;
+    };
+  }, [profileLoading, isAuthed, profile, router]);
+
+  if (profileLoading || loading) {
     return (
       <div className="min-h-[60vh] grid place-items-center">
         <p className="text-sm text-neutral-500">Loading…</p>
@@ -54,7 +76,7 @@ export default function HomePage() {
         <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl sm:text-3xl font-semibold">
-              Welcome, {profile?.profile?.nickname}!
+              Welcome, {profile?.nickname || "User"}!
             </h1>
             <p className="text-sm text-neutral-300 mt-1">
               Here is a quick overview of your recent uploads.
@@ -92,7 +114,7 @@ export default function HomePage() {
                   className="rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-900/40 hover:opacity-95 transition"
                 >
                   <img
-                    src={photo.thumbnailUrl}
+                    src={photo.thumbnailUrl || photo.url}
                     alt="Recent upload"
                     className="w-full aspect-square object-cover"
                     loading="lazy"

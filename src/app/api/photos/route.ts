@@ -178,6 +178,40 @@ async function getSharedEventIdsForUserGroups(
   return out;
 }
 
+async function getNicknamesForUsers(table: string, userIds: string[]) {
+  const out = new Map<string, string>();
+
+  const unique = Array.from(new Set(userIds.filter(Boolean)));
+  if (unique.length === 0) return out;
+
+  const keys = unique.map((sub) => ({ PK: `USER#${sub}`, SK: "PROFILE" }));
+  const chunks = chunk(keys, 100);
+
+  for (const c of chunks) {
+    const got = await ddb.send(
+      new BatchGetCommand({
+        RequestItems: {
+          [table]: {
+            Keys: c,
+            ProjectionExpression: "PK, nickname",
+          },
+        },
+      })
+    );
+
+    const found = got.Responses?.[table] ?? [];
+    for (const it of found as any[]) {
+      const pk = asNonEmptyString(it?.PK);
+      const nick = asNonEmptyString(it?.nickname);
+      if (!pk || !pk.startsWith("USER#") || !nick) continue;
+      const sub = pk.replace(/^USER#/, "");
+      out.set(sub, nick);
+    }
+  }
+
+  return out;
+}
+
 export async function GET(req: NextRequest) {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
@@ -249,6 +283,12 @@ export async function GET(req: NextRequest) {
       const items = (result.Items ?? []) as any[];
       const lastEvaluated = result.LastEvaluatedKey ?? null;
 
+      const ownerIds = items
+        .map((it) => asNonEmptyString(it?.ownerUserId))
+        .filter(Boolean) as string[];
+
+      const nickByOwner = await getNicknamesForUsers(table, ownerIds);
+
       const photos = await Promise.all(
         items.map(async (item: any) => {
           const url = await signGetUrl(item.s3Key);
@@ -258,6 +298,8 @@ export async function GET(req: NextRequest) {
             : item.s3Key
             ? previewUrlForKey(item.s3Key)
             : undefined;
+
+          const ownerUserId = asNonEmptyString(item.ownerUserId);
 
           return {
             key: item.s3Key,
@@ -269,7 +311,10 @@ export async function GET(req: NextRequest) {
             url,
             eventId: item.eventId,
             takenAt: item.takenAt,
-            ownerUserId: item.ownerUserId,
+            ownerUserId: ownerUserId,
+            ownerNickname: ownerUserId
+              ? nickByOwner.get(ownerUserId) ?? null
+              : null,
             pk: item.PK,
             sk: item.SK,
           };
@@ -282,9 +327,6 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Global feed, one page of the GSI per request.
-    // Important: nextCursor is always derived from DynamoDB LastEvaluatedKey,
-    // even if this page yields few visible photos after filtering.
     const gsiRes = await ddb.send(
       new QueryCommand({
         TableName: table,
@@ -338,6 +380,12 @@ export async function GET(req: NextRequest) {
 
     const visible = [...owned, ...allowedNotOwned];
 
+    const ownerIds = visible
+      .map((it) => asNonEmptyString(it?.ownerUserId))
+      .filter(Boolean) as string[];
+
+    const nickByOwner = await getNicknamesForUsers(table, ownerIds);
+
     const photos = await Promise.all(
       visible.map(async (item: any) => {
         const url = await signGetUrl(item.s3Key);
@@ -347,6 +395,8 @@ export async function GET(req: NextRequest) {
           : item.s3Key
           ? previewUrlForKey(item.s3Key)
           : undefined;
+
+        const ownerUserId = asNonEmptyString(item.ownerUserId);
 
         return {
           key: item.s3Key,
@@ -358,7 +408,10 @@ export async function GET(req: NextRequest) {
           url,
           eventId: item.eventId,
           takenAt: item.takenAt,
-          ownerUserId: item.ownerUserId,
+          ownerUserId: ownerUserId,
+          ownerNickname: ownerUserId
+            ? nickByOwner.get(ownerUserId) ?? null
+            : null,
           pk: item.PK,
           sk: item.SK,
         };

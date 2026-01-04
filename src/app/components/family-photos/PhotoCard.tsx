@@ -24,6 +24,26 @@ function formatDate(value?: string) {
   return d.toLocaleDateString();
 }
 
+function getNickname(photo: Photo) {
+  const raw =
+    (photo as any).ownerNickname ||
+    (photo as any).nickname ||
+    (photo as any).preferred_username ||
+    "";
+  const nick = typeof raw === "string" ? raw.trim() : "";
+  return nick || null;
+}
+
+function initialsFromName(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
+
+  const out = (first + last).toUpperCase();
+  return out || name.slice(0, 1).toUpperCase();
+}
+
 const TrashIcon = () => (
   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
     <path
@@ -73,8 +93,11 @@ export default function PhotoCard({
   const thumbSrc = photo.thumbnailUrl || photo.url;
   const dateText = formatDate(photo.takenAt);
   const eventText = photo.eventId || "";
-  const showMeta = Boolean(eventText || dateText);
 
+  const nickname = getNickname(photo);
+  const avatarLetters = nickname ? initialsFromName(nickname) : null;
+
+  const showMeta = Boolean(eventText || dateText || nickname);
   const showControls = isSelected;
 
   return (
@@ -130,12 +153,25 @@ export default function PhotoCard({
                         {eventText}
                       </div>
                     ) : null}
+
                     {dateText ? (
                       <div className="text-[11px] text-white/75">
                         {dateText}
                       </div>
                     ) : null}
+
+                    {nickname ? (
+                      <div className="mt-1 flex items-center gap-2">
+                        <div className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-white/10 bg-white/10 text-[10px] font-semibold text-white/90">
+                          {avatarLetters}
+                        </div>
+                        <div className="truncate text-[11px] text-white/75">
+                          {nickname}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
+
                   {isSelected ? (
                     <div className="text-[11px] text-white/80">Selected</div>
                   ) : null}

@@ -21,6 +21,17 @@ function now() {
   return new Date().toISOString();
 }
 
+function isProfileComplete(p: any) {
+  return Boolean(
+    typeof p?.username === "string" &&
+      p.username.trim() &&
+      typeof p?.firstName === "string" &&
+      p.firstName.trim() &&
+      typeof p?.lastName === "string" &&
+      p.lastName.trim()
+  );
+}
+
 function defaultNickname(user: any) {
   if (typeof user.nickname === "string" && user.nickname) return user.nickname;
   if (typeof user.preferred_username === "string" && user.preferred_username)
@@ -53,7 +64,11 @@ export async function GET(req: NextRequest) {
       SK: sk,
       entityType: "PROFILE",
       nickname: defaultNickname(user),
+      username: "",
+      firstName: "",
+      lastName: "",
       avatarKey: null,
+      profileComplete: false,
       createdAt: now(),
       updatedAt: now(),
     };
@@ -65,6 +80,11 @@ export async function GET(req: NextRequest) {
         ConditionExpression: "attribute_not_exists(PK)",
       })
     );
+  }
+
+  const complete = isProfileComplete(profile);
+  if (profile.profileComplete !== complete) {
+    profile.profileComplete = complete;
   }
 
   let avatarUrl = null;
@@ -80,7 +100,7 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    profile: { ...profile, avatarUrl },
+    profile: { ...profile, avatarUrl, profileComplete: complete },
   });
 }
 
@@ -90,21 +110,53 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { nickname, avatarKey } = await req.json();
+  const { nickname, avatarKey, username, firstName, lastName } =
+    await req.json();
 
-  if (!nickname || typeof nickname !== "string") {
+  const nick = typeof nickname === "string" ? nickname.trim().slice(0, 32) : "";
+  const usern =
+    typeof username === "string" ? username.trim().toLowerCase() : "";
+  const fn = typeof firstName === "string" ? firstName.trim().slice(0, 32) : "";
+  const ln = typeof lastName === "string" ? lastName.trim().slice(0, 32) : "";
+
+  if (!nick)
     return NextResponse.json({ error: "Nickname required" }, { status: 400 });
+  if (!fn)
+    return NextResponse.json({ error: "First name required" }, { status: 400 });
+  if (!ln)
+    return NextResponse.json({ error: "Last name required" }, { status: 400 });
+  if (!usern)
+    return NextResponse.json({ error: "Username required" }, { status: 400 });
+
+  if (!/^[a-z0-9_]{3,20}$/.test(usern)) {
+    return NextResponse.json(
+      {
+        error:
+          "Username must be 3 to 20 characters and use letters numbers or underscore",
+      },
+      { status: 400 }
+    );
   }
+
+  const complete = isProfileComplete({
+    username: usern,
+    firstName: fn,
+    lastName: ln,
+  });
 
   const result = await ddb.send(
     new UpdateCommand({
       TableName: process.env.DYNAMO_TABLE_NAME!,
       Key: { PK: `USER#${user.sub}`, SK: "PROFILE" },
       UpdateExpression:
-        "SET nickname = :n, avatarKey = :a, updatedAt = :u, entityType = :t",
+        "SET nickname = :n, avatarKey = :a, username = :un, firstName = :fn, lastName = :ln, profileComplete = :pc, updatedAt = :u, entityType = :t",
       ExpressionAttributeValues: {
-        ":n": nickname.trim().slice(0, 32),
+        ":n": nick,
         ":a": avatarKey ?? null,
+        ":un": usern,
+        ":fn": fn,
+        ":ln": ln,
+        ":pc": complete,
         ":u": now(),
         ":t": "PROFILE",
       },

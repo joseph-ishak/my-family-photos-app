@@ -4,10 +4,13 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 
 type Profile = {
   nickname: string;
-  avatarUrl?: string | null;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  profileComplete?: boolean;
   avatarKey?: string | null;
+  avatarUrl?: string | null;
 };
-
 type ProfileContextValue = {
   loading: boolean;
   isAuthed: boolean;

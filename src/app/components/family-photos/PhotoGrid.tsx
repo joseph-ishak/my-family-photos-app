@@ -23,7 +23,7 @@ export default function PhotoGrid({
   onUpdate,
 }: Props) {
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-5 lg:gap-4 xl:grid-cols-6">
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4">
       {photos.map((photo) => {
         const canEdit = !!userSub && photo.ownerUserId === userSub;
         const isSelected = selectedKeys.includes(photo.key);
