@@ -1,7 +1,6 @@
-// src/app/(public)/login/page.tsx
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const EyeIcon = ({ open }: { open: boolean }) =>
@@ -69,16 +68,48 @@ export default function LoginPage() {
 
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
 
-  const canSubmitLogin = useMemo(() => {
-    if (loading) return false;
-    if (!username.trim()) return false;
-    if (!password) return false;
-    if (needsNewPassword && !newPassword) return false;
-    return true;
-  }, [loading, username, password, needsNewPassword, newPassword]);
+  useEffect(() => {
+    firstFieldRef.current?.focus();
+  }, [mode]);
 
-  const handleLogin = async () => {
-    if (!canSubmitLogin) return;
+  const canSubmit = useMemo(() => {
+    if (loading) return false;
+
+    const u = username.trim();
+
+    if (mode === "login") {
+      if (!u) return false;
+      if (!password) return false;
+      if (needsNewPassword && !newPassword) return false;
+      return true;
+    }
+
+    if (mode === "forgotStart") {
+      if (!u) return false;
+      return true;
+    }
+
+    if (mode === "forgotConfirm") {
+      if (!u) return false;
+      if (!resetCode.trim()) return false;
+      if (!resetPassword) return false;
+      return true;
+    }
+
+    return false;
+  }, [
+    loading,
+    mode,
+    username,
+    password,
+    needsNewPassword,
+    newPassword,
+    resetCode,
+    resetPassword,
+  ]);
+
+  async function handleLogin() {
+    if (!canSubmit) return;
 
     setLoading(true);
     setError(null);
@@ -98,7 +129,6 @@ export default function LoginPage() {
       if (res.ok) {
         const params = new URLSearchParams(window.location.search);
         const next = params.get("next") || "/home";
-
         router.replace(next);
         router.refresh();
         return;
@@ -108,19 +138,19 @@ export default function LoginPage() {
 
       if (res.status === 409 && data?.error === "NEW_PASSWORD_REQUIRED") {
         setNeedsNewPassword(true);
-        setInfo("This account requires a new password before you can sign in.");
+        setInfo("This account requires a new password.");
         return;
       }
 
       setError(data?.error ?? "Login failed");
-    } catch {
-      setError("An error occurred during login");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const handleForgotStart = async () => {
+  async function handleForgotStart() {
+    if (!canSubmit) return;
+
     setLoading(true);
     setError(null);
     setInfo(null);
@@ -135,9 +165,9 @@ export default function LoginPage() {
 
       if (res.ok) {
         setMode("forgotConfirm");
-        setInfo("Check your email for a verification code.");
         setResetCode("");
         setResetPassword("");
+        setInfo("Check your email for the verification code.");
         return;
       }
 
@@ -146,28 +176,34 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const handleForgotConfirm = async () => {
+  async function handleForgotConfirm() {
     setLoading(true);
     setError(null);
     setInfo(null);
+
+    const payload = {
+      username: username.trim(),
+      code: resetCode.trim(),
+      newPassword: resetPassword,
+    };
+
+    console.log("reset submit payload", payload);
 
     try {
       const res = await fetch("/api/auth/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({
-          username: username.trim(),
-          code: resetCode.trim(),
-          newPassword: resetPassword,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (res.ok) {
         setMode("login");
-        setNeedsNewPassword(false);
+        setPassword("");
+        setResetCode("");
+        setResetPassword("");
         setInfo("Password updated. Please sign in.");
         return;
       }
@@ -177,14 +213,15 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const onSubmit = (e: React.FormEvent) => {
+  function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+
     if (mode === "login") handleLogin();
-    if (mode === "forgotStart") handleForgotStart();
-    if (mode === "forgotConfirm") handleForgotConfirm();
-  };
+    else if (mode === "forgotStart") handleForgotStart();
+    else handleForgotConfirm();
+  }
 
   return (
     <div className="min-h-[100dvh] bg-black text-neutral-100 grid place-items-center px-4">
@@ -214,27 +251,14 @@ export default function LoginPage() {
           />
 
           {mode === "login" && (
-            <>
-              <input
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
-                disabled={loading}
-                className="h-11 w-full rounded-2xl border border-white/10 bg-neutral-950 px-4 text-sm"
-              />
-
-              {needsNewPassword && (
-                <input
-                  type={showNewPassword ? "text" : "password"}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="New password"
-                  disabled={loading}
-                  className="h-11 w-full rounded-2xl border border-white/10 bg-neutral-950 px-4 text-sm"
-                />
-              )}
-            </>
+            <input
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              disabled={loading}
+              className="h-11 w-full rounded-2xl border border-white/10 bg-neutral-950 px-4 text-sm"
+            />
           )}
 
           {mode === "forgotConfirm" && (
@@ -272,20 +296,38 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            disabled={!canSubmitLogin || loading}
-            className="h-11 w-full rounded-2xl bg-neutral-50 text-neutral-900 font-medium flex items-center justify-center gap-2"
+            disabled={!canSubmit || loading}
+            className="h-11 w-full rounded-2xl bg-neutral-50 text-neutral-900 font-medium disabled:opacity-50"
           >
-            {loading && <Spinner />}
-            {mode === "login" ? "Sign in" : "Continue"}
+            {loading
+              ? "Please wait…"
+              : mode === "login"
+              ? "Sign in"
+              : "Continue"}
           </button>
 
           <div className="flex justify-between text-sm text-white/60">
             {mode === "login" ? (
-              <button type="button" onClick={() => setMode("forgotStart")}>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("forgotStart");
+                  setError(null);
+                  setInfo(null);
+                  setPassword("");
+                }}
+              >
                 Forgot password
               </button>
             ) : (
-              <button type="button" onClick={() => setMode("login")}>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("login");
+                  setError(null);
+                  setInfo(null);
+                }}
+              >
                 Back to sign in
               </button>
             )}

@@ -1,30 +1,14 @@
 // src/app/api/groups/[groupId]/members/[userId]/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
-  DynamoDBDocumentClient,
   GetCommand,
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { getVerifiedUser } from "@/lib/auth-server";
-
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: "us-west-2" })
-);
-
-type GroupRole = "owner" | "admin" | "member";
-
-function asNonEmptyString(v: unknown) {
-  const s = typeof v === "string" ? v.trim() : "";
-  return s.length > 0 ? s : null;
-}
-
-function normalizeRole(v: unknown): GroupRole {
-  const s = asNonEmptyString(v);
-  if (s === "owner" || s === "admin" || s === "member") return s;
-  return "member";
-}
+import { ddb } from "@/lib/db/client";
+import { asNonEmptyString, normalizeRole } from "@/lib/utils";
+import { requireTable } from "@/lib/api";
 
 export async function DELETE(req: NextRequest, ctx: any) {
   const user = await getVerifiedUser(req);
@@ -44,15 +28,9 @@ export async function DELETE(req: NextRequest, ctx: any) {
     return NextResponse.json({ error: "Missing userId" }, { status: 400 });
   }
 
-  const table = process.env.DYNAMO_TABLE_NAME!;
-  if (!table) {
-    return NextResponse.json(
-      { error: "Server config missing" },
-      { status: 500 }
-    );
-  }
-
   try {
+    const table = requireTable();
+
     const groupRes = await ddb.send(
       new GetCommand({
         TableName: table,

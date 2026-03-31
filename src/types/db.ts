@@ -1,0 +1,84 @@
+/**
+ * TypeScript interfaces for DynamoDB record shapes.
+ *
+ * These mirror the actual item structures stored in the table. Using these
+ * instead of `any[]` casts ensures that typos in attribute names are caught
+ * at compile time rather than silently returning undefined at runtime.
+ */
+
+export interface MediaRecord {
+  PK: string; // EVENT#<eventId>
+  SK: string; // MEDIA#<takenAt>#<mediaId>
+  GSI1PK: "PHOTO";
+  GSI1SK: string; // MEDIA#<takenAt>#<mediaId>
+  mediaId: string;
+  mediaType: "photo" | "video";
+  eventId: string;
+  ownerUserId: string;
+  takenAt: string;
+  uploadedAt: string;
+  s3Key: string;
+  thumbnailKey?: string;
+  mimeType: string;
+  filename: string;
+  s3Bucket?: string;
+}
+
+export interface EventRecord {
+  PK: "EVENT";
+  SK: string; // EVENT#<eventId>
+  eventId: string;
+  name: string;
+  ownerUserId: string;
+  createdAt: string;
+  updatedAt: string;
+  photoCount: number;
+  coverKey?: string;
+}
+
+export interface UserProfileRecord {
+  PK: string; // USER#<sub>
+  SK: "PROFILE";
+  nickname?: string;
+  avatarKey?: string;
+  email?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface GroupRecord {
+  PK: "GROUP";
+  SK: string; // GROUP#<groupId>
+  groupId: string;
+  name: string;
+  ownerUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GroupMemberRecord {
+  PK: string; // GROUP#<groupId>
+  SK: string; // MEMBER#<userId>
+  groupId: string;
+  userId: string;
+  role: "owner" | "admin" | "member";
+  createdAt: string;
+}
+
+export interface UserGroupRecord {
+  PK: string; // USER#<sub>
+  SK: string; // GROUP#<groupId>
+  groupId: string;
+  name: string;
+  role: "owner" | "admin" | "member";
+  createdAt: string;
+}
+
+export interface EventShareRecord {
+  PK: string; // EVENT#<eventId>
+  SK: string; // SHARE#GROUP#<groupId>
+  eventId: string;
+  groupId: string;
+  sharedAt: string;
+  sharedByUserId: string;
+}

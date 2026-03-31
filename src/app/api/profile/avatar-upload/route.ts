@@ -1,11 +1,11 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { v4 as uuidv4 } from "uuid";
 import { getVerifiedUser } from "@/lib/auth-server";
-
-const s3 = new S3Client({ region: "us-west-2" });
+import { s3 } from "@/lib/db/client";
+import { requireBucket } from "@/lib/api";
 
 export async function POST(req: NextRequest) {
   const user = await getVerifiedUser(req);
@@ -21,8 +21,10 @@ export async function POST(req: NextRequest) {
 
   const key = `avatars/${user.sub}/${uuidv4()}_${safeName}`;
 
+  const bucket = requireBucket();
+
   const command = new PutObjectCommand({
-    Bucket: process.env.S3_BUCKET_NAME!,
+    Bucket: bucket,
     Key: key,
     ContentType: filetype,
   });

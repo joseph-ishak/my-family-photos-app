@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  CognitoIdentityProviderClient,
   InitiateAuthCommand,
   RespondToAuthChallengeCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
-
-const client = new CognitoIdentityProviderClient({
-  region: process.env.COGNITO_REGION,
-});
+import { cognito } from "@/lib/db/client";
 
 export async function POST(req: NextRequest) {
   const { username, password, newPassword } = await req.json();
@@ -20,7 +16,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const init = await client.send(
+    const init = await cognito.send(
       new InitiateAuthCommand({
         AuthFlow: "USER_PASSWORD_AUTH",
         ClientId: process.env.COGNITO_APP_CLIENT_ID!,
@@ -30,11 +26,6 @@ export async function POST(req: NextRequest) {
         },
       })
     );
-
-    console.log("Cognito InitiateAuth response:", {
-      ChallengeName: init.ChallengeName,
-      HasAuthResult: !!init.AuthenticationResult,
-    });
 
     let authResult = init.AuthenticationResult;
 
@@ -49,7 +40,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const challenge = await client.send(
+      const challenge = await cognito.send(
         new RespondToAuthChallengeCommand({
           ClientId: process.env.COGNITO_APP_CLIENT_ID!,
           ChallengeName: "NEW_PASSWORD_REQUIRED",
@@ -62,19 +53,11 @@ export async function POST(req: NextRequest) {
       );
 
       authResult = challenge.AuthenticationResult;
-      console.log("Cognito challenge result:", {
-        HasAuthResult: !!authResult,
-      });
     }
 
     if (!authResult?.AccessToken || !authResult?.IdToken) {
       return NextResponse.json(
-        {
-          error: "Missing tokens from Cognito",
-          debug: {
-            challenge: init.ChallengeName ?? null,
-          },
-        },
+        { error: "Missing tokens from Cognito" },
         { status: 400 }
       );
     }

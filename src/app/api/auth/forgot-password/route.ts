@@ -1,12 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  CognitoIdentityProviderClient,
   ForgotPasswordCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
-
-const client = new CognitoIdentityProviderClient({
-  region: process.env.COGNITO_REGION,
-});
+import { cognito } from "@/lib/db/client";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({} as any));
@@ -18,7 +14,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await client.send(
+    await cognito.send(
       new ForgotPasswordCommand({
         ClientId: process.env.COGNITO_APP_CLIENT_ID!,
         Username: username,

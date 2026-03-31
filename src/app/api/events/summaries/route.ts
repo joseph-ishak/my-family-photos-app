@@ -1,13 +1,9 @@
 import { NextResponse } from "next/server";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { getVerifiedUser } from "@/lib/auth-server";
 import type { NextRequest } from "next/server";
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: process.env.AWS_REGION || "us-west-2" })
-);
+import { ddb } from "@/lib/db/client";
 
-const TABLE = process.env.DYNAMO_TABLE_NAME!;
 const CF_BASE = (process.env.NEXT_PUBLIC_PREVIEWS_CDN_URL || "").replace(
   /\/$/,
   ""
@@ -23,6 +19,9 @@ export async function GET(req: NextRequest) {
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const TABLE = process.env.DYNAMO_TABLE_NAME!;
+
   // List all event records
   // Your design note says event records are stored at:
   // pk = "EVENT"

@@ -195,6 +195,15 @@ function isHeicOrHeif(file: File) {
   );
 }
 
+// iPhone .mov files (and some other mobile video formats) can arrive with an
+// empty MIME type from the browser file picker. Check the extension as fallback.
+const VIDEO_EXTENSIONS = [".mov", ".mp4", ".m4v", ".avi", ".mkv", ".webm"];
+
+function isVideoByExtension(file: File) {
+  const name = (file.name || "").toLowerCase();
+  return VIDEO_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
+
 function replaceExtToJpg(name: string) {
   if (!name) return "image.jpg";
   if (/\.(heic|heif)$/i.test(name))
@@ -303,7 +312,34 @@ export default function PhotoUploadModal({
       s3Key: string;
       mediaType: "photo" | "video";
       kind: "preview" | "original";
+      // Returned for kind === "original" only — used in the commit step.
+      mediaId?: string;
+      sk?: string;
+      takenAt?: string;
+      filename?: string;
+      eventId?: string;
     };
+  }
+
+  async function commitUpload(args: {
+    mediaId: string;
+    sk: string;
+    s3Key: string;
+    eventId: string;
+    takenAt: string;
+    mimeType: string;
+    filename: string;
+    mediaType: "photo" | "video";
+    thumbnailKey?: string;
+  }) {
+    const res = await fetch("/api/media/commit", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(args),
+    });
+
+    if (!res.ok) throw new Error(`commit failed: ${res.status}`);
   }
 
   async function putToS3(signedUrl: string, contentType: string, body: Blob) {
@@ -321,7 +357,8 @@ export default function PhotoUploadModal({
     eventIdValue: string,
     userId: string
   ) {
-    const mediaType: "photo" | "video" = isVideoFile(file) ? "video" : "photo";
+    const mediaType: "photo" | "video" =
+      isVideoFile(file) || isVideoByExtension(file) ? "video" : "photo";
 
     let thumbnailKey: string | undefined;
 
@@ -364,9 +401,11 @@ export default function PhotoUploadModal({
       }
     }
 
+    const mimeType = file.type || "application/octet-stream";
+
     const originalResp = await requestSignedUrl({
       filename: file.name,
-      filetype: file.type || "application/octet-stream",
+      filetype: mimeType,
       userId,
       eventId: eventIdValue,
       mediaType,
@@ -374,11 +413,27 @@ export default function PhotoUploadModal({
       thumbnailKey,
     });
 
-    await putToS3(
-      originalResp.signedUrl,
-      file.type || "application/octet-stream",
-      file
-    );
+    // Upload the file bytes directly to S3 via the presigned URL.
+    await putToS3(originalResp.signedUrl, mimeType, file);
+
+    // Only after S3 confirms the upload do we write the DynamoDB record.
+    // This prevents orphaned metadata records for interrupted uploads.
+    const { mediaId, sk, takenAt, filename: safeName, eventId: committedEventId } = originalResp;
+    if (!mediaId || !sk || !takenAt || !safeName || !committedEventId) {
+      throw new Error("upload-url response missing commit fields");
+    }
+
+    await commitUpload({
+      mediaId,
+      sk,
+      s3Key: originalResp.s3Key,
+      eventId: committedEventId,
+      takenAt,
+      mimeType,
+      filename: safeName,
+      mediaType,
+      thumbnailKey,
+    });
   }
 
   async function runWithConcurrency(
@@ -424,7 +479,9 @@ export default function PhotoUploadModal({
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files || []);
-    const supported = picked.filter((f) => isImageFile(f) || isVideoFile(f));
+    const supported = picked.filter(
+      (f) => isImageFile(f) || isVideoFile(f) || isHeicOrHeif(f) || isVideoByExtension(f)
+    );
 
     setFiles(supported);
     setPreparedCount(0);

@@ -1,9 +1,7 @@
 // src/app/api/events/[eventId]/share/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
-  DynamoDBDocumentClient,
   GetCommand,
   QueryCommand,
   BatchGetCommand,
@@ -11,27 +9,9 @@ import {
   type BatchGetCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import { getVerifiedUser } from "@/lib/auth-server";
-
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: "us-west-2" })
-);
-
-function asNonEmptyString(v: unknown) {
-  const s = typeof v === "string" ? v.trim() : "";
-  return s.length > 0 ? s : null;
-}
-
-function normalizeRole(v: unknown): "owner" | "admin" | "member" {
-  const s = asNonEmptyString(v);
-  if (s === "owner" || s === "admin" || s === "member") return s;
-  return "member";
-}
-
-function chunk<T>(arr: T[], size: number) {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
+import { ddb } from "@/lib/db/client";
+import { asNonEmptyString, normalizeRole, chunk } from "@/lib/utils";
+import { requireTable } from "@/lib/api";
 
 async function requireEventOwner(
   table: string,
@@ -80,13 +60,7 @@ export async function GET(req: NextRequest, ctx: any) {
     return NextResponse.json({ error: "Missing eventId" }, { status: 400 });
   }
 
-  const table = process.env.DYNAMO_TABLE_NAME!;
-  if (!table) {
-    return NextResponse.json(
-      { error: "Server config missing" },
-      { status: 500 }
-    );
-  }
+  const table = requireTable();
 
   const ownerCheck = await requireEventOwner(table, eventId, user.sub);
   if (!ownerCheck.ok) {
@@ -200,13 +174,7 @@ export async function POST(req: NextRequest, ctx: any) {
     return NextResponse.json({ error: "Missing eventId" }, { status: 400 });
   }
 
-  const table = process.env.DYNAMO_TABLE_NAME!;
-  if (!table) {
-    return NextResponse.json(
-      { error: "Server config missing" },
-      { status: 500 }
-    );
-  }
+  const table = requireTable();
 
   const body = await req.json().catch(() => ({} as any));
   const groupId = asNonEmptyString(body?.groupId);
@@ -334,13 +302,7 @@ export async function DELETE(req: NextRequest, ctx: any) {
     return NextResponse.json({ error: "groupId is required" }, { status: 400 });
   }
 
-  const table = process.env.DYNAMO_TABLE_NAME!;
-  if (!table) {
-    return NextResponse.json(
-      { error: "Server config missing" },
-      { status: 500 }
-    );
-  }
+  const table = requireTable();
 
   try {
     const ownerCheck = await requireEventOwner(table, eventId, user.sub);

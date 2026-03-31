@@ -1,26 +1,15 @@
 // src/app/api/users/resolve/route.ts
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, BatchGetCommand } from "@aws-sdk/lib-dynamodb";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { BatchGetCommand } from "@aws-sdk/lib-dynamodb";
+import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getVerifiedUser } from "@/lib/auth-server";
-
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: "us-west-2" })
-);
-
-const s3 = new S3Client({ region: "us-west-2" });
+import { ddb, s3 } from "@/lib/db/client";
+import { chunk } from "@/lib/utils";
 
 function safeStr(v: any) {
   return typeof v === "string" ? v : "";
-}
-
-function chunk<T>(arr: T[], size: number) {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
 }
 
 export async function POST(req: NextRequest) {

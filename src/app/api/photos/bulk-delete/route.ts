@@ -1,18 +1,14 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
-  DynamoDBDocumentClient,
   BatchGetCommand,
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
-import { S3Client, DeleteObjectsCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand } from "@aws-sdk/client-s3";
 import { getVerifiedUser } from "@/lib/auth-server";
-
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: "us-west-2" })
-);
-const s3 = new S3Client({ region: "us-west-2" });
+import { ddb, s3 } from "@/lib/db/client";
+import { chunk } from "@/lib/utils";
+import { requireTable, requireBucket } from "@/lib/api";
 
 type DeleteItem = {
   pk: string;
@@ -21,12 +17,6 @@ type DeleteItem = {
 };
 
 const MAX_ITEMS = 200;
-
-function chunk<T>(arr: T[], size: number) {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
 
 export async function POST(req: NextRequest) {
   const user = await getVerifiedUser(req);
@@ -48,12 +38,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const table = requireTable();
+  const bucket = requireBucket();
+
   const keys = items.map((i) => ({ PK: i.pk, SK: i.sk }));
 
   const got = await ddb.send(
     new BatchGetCommand({
       RequestItems: {
-        [process.env.DYNAMO_TABLE_NAME!]: {
+        [table]: {
           Keys: keys,
           ProjectionExpression: "PK, SK, ownerUserId, s3Key",
         },
@@ -61,7 +54,7 @@ export async function POST(req: NextRequest) {
     })
   );
 
-  const found = got.Responses?.[process.env.DYNAMO_TABLE_NAME!] ?? [];
+  const found = got.Responses?.[table] ?? [];
 
   const deletable = found.filter((x: any) => x.ownerUserId === user.sub);
 
@@ -78,7 +71,7 @@ export async function POST(req: NextRequest) {
       new TransactWriteCommand({
         TransactItems: c.map((d: any) => ({
           Delete: {
-            TableName: process.env.DYNAMO_TABLE_NAME!,
+            TableName: table,
             Key: { PK: d.PK, SK: d.SK },
             ConditionExpression: "ownerUserId = :u",
             ExpressionAttributeValues: { ":u": user.sub },
@@ -96,7 +89,7 @@ export async function POST(req: NextRequest) {
   if (s3Keys.length > 0) {
     await s3.send(
       new DeleteObjectsCommand({
-        Bucket: process.env.S3_BUCKET_NAME!,
+        Bucket: bucket,
         Delete: { Objects: s3Keys, Quiet: true },
       })
     );

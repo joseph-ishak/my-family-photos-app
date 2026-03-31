@@ -1,21 +1,12 @@
 // src/app/api/upload-url/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import {
-  PutCommand,
-  UpdateCommand,
-  DynamoDBDocumentClient,
-} from "@aws-sdk/lib-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 import { getVerifiedUser } from "@/lib/auth-server";
-
-const s3 = new S3Client({ region: "us-west-2" });
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: "us-west-2" })
-);
+import { s3 } from "@/lib/db/client";
+import { requireBucket } from "@/lib/api";
 
 function isValidMediaType(value: unknown): value is "photo" | "video" {
   return value === "photo" || value === "video";
@@ -31,7 +22,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json().catch(() => ({} as any));
+  const body = await req.json().catch(() => ({} as Record<string, unknown>));
 
   const filename = body?.filename;
   const filetype = body?.filetype;
@@ -47,11 +38,6 @@ export async function POST(req: NextRequest) {
   const kind: "original" | "preview" = isValidKind(kindRaw)
     ? kindRaw
     : "original";
-
-  const thumbnailKeyFromClient: string | undefined =
-    typeof body?.thumbnailKey === "string" && body.thumbnailKey.trim()
-      ? body.thumbnailKey.trim()
-      : undefined;
 
   if (!filename || !filetype) {
     return NextResponse.json(
@@ -71,15 +57,7 @@ export async function POST(req: NextRequest) {
   const timePart = takenAt ?? uploadedAt;
   const sk = `MEDIA#${timePart}#${mediaId}`;
 
-  const bucket = process.env.S3_BUCKET_NAME!;
-  const table = process.env.DYNAMO_TABLE_NAME!;
-
-  if (!bucket || !table) {
-    return NextResponse.json(
-      { error: "Server config missing" },
-      { status: 500 }
-    );
-  }
+  const bucket = requireBucket();
 
   const basePrefix = kind === "preview" ? "previews" : "uploads";
   const typePrefix = mediaType === "video" ? "videos" : "photos";
@@ -100,52 +78,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ signedUrl, s3Key, mediaType, kind });
   }
 
-  await ddb.send(
-    new PutCommand({
-      TableName: table,
-      Item: {
-        PK: `EVENT#${eventName}`,
-        SK: sk,
-
-        GSI1PK: "PHOTO",
-        GSI1SK: sk,
-
-        mediaId,
-        mediaType,
-        eventId: eventName,
-        ownerUserId: user.sub,
-        takenAt: timePart,
-        uploadedAt,
-        s3Bucket: bucket,
-        s3Key,
-        thumbnailKey: thumbnailKeyFromClient,
-        mimeType: filetype,
-        filename: safeName,
-      },
-    })
-  );
-
-  const coverKey = thumbnailKeyFromClient ?? s3Key;
-
-  await ddb.send(
-    new UpdateCommand({
-      TableName: table,
-      Key: { PK: "EVENT", SK: `EVENT#${eventName}` },
-      UpdateExpression:
-        "ADD photoCount :one SET updatedAt = :now, createdAt = if_not_exists(createdAt, :now), #name = if_not_exists(#name, :name), eventId = if_not_exists(eventId, :eventId), coverKey = :coverKey, ownerUserId = if_not_exists(ownerUserId, :owner)",
-      ExpressionAttributeNames: {
-        "#name": "name",
-      },
-      ExpressionAttributeValues: {
-        ":one": 1,
-        ":now": uploadedAt,
-        ":name": eventName,
-        ":eventId": eventName,
-        ":coverKey": coverKey,
-        ":owner": user.sub,
-      },
-    })
-  );
-
-  return NextResponse.json({ signedUrl, s3Key, mediaType, kind, sk });
+  // For originals: return the metadata needed for the commit step.
+  // The DynamoDB record is intentionally NOT written here — it is only written
+  // after the client confirms the S3 upload succeeded (POST /api/media/commit).
+  // This prevents orphaned DynamoDB records when S3 uploads fail mid-transfer.
+  return NextResponse.json({
+    signedUrl,
+    s3Key,
+    mediaType,
+    kind,
+    mediaId,
+    sk,
+    takenAt: timePart,
+    filename: safeName,
+    eventId: eventName,
+  });
 }

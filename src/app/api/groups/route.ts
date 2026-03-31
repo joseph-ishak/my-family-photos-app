@@ -1,25 +1,15 @@
 // src/app/api/groups/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
-  DynamoDBDocumentClient,
   QueryCommand,
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 import { getVerifiedUser } from "@/lib/auth-server";
-
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: "us-west-2" })
-);
-
-type GroupRole = "owner" | "admin" | "member";
-
-function asNonEmptyString(v: unknown) {
-  const s = typeof v === "string" ? v.trim() : "";
-  return s.length > 0 ? s : null;
-}
+import { ddb } from "@/lib/db/client";
+import { asNonEmptyString, GroupRole } from "@/lib/utils";
+import { requireTable } from "@/lib/api";
 
 export async function GET(req: NextRequest) {
   const user = await getVerifiedUser(req);
@@ -27,15 +17,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const table = process.env.DYNAMO_TABLE_NAME!;
-  if (!table) {
-    return NextResponse.json(
-      { error: "Server config missing" },
-      { status: 500 }
-    );
-  }
-
   try {
+    const table = requireTable();
+
     const result = await ddb.send(
       new QueryCommand({
         TableName: table,
@@ -94,34 +78,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const table = process.env.DYNAMO_TABLE_NAME!;
-  if (!table) {
-    return NextResponse.json(
-      { error: "Server config missing" },
-      { status: 500 }
-    );
-  }
-
-  const body = await req.json().catch(() => ({} as any));
-  const name = asNonEmptyString(body?.name);
-
-  if (!name) {
-    return NextResponse.json({ error: "name is required" }, { status: 400 });
-  }
-
-  const groupId = uuidv4();
-  const now = new Date().toISOString();
-
-  const groupPk = "GROUP";
-  const groupSk = `GROUP#${groupId}`;
-
-  const memberPk = `GROUP#${groupId}`;
-  const memberSk = `MEMBER#${user.sub}`;
-
-  const userPk = `USER#${user.sub}`;
-  const userSk = `GROUP#${groupId}`;
-
   try {
+    const table = requireTable();
+
+    const body = await req.json().catch(() => ({} as any));
+    const name = asNonEmptyString(body?.name);
+
+    if (!name) {
+      return NextResponse.json({ error: "name is required" }, { status: 400 });
+    }
+
+    const groupId = uuidv4();
+    const now = new Date().toISOString();
+
+    const groupPk = "GROUP";
+    const groupSk = `GROUP#${groupId}`;
+
+    const memberPk = `GROUP#${groupId}`;
+    const memberSk = `MEMBER#${user.sub}`;
+
+    const userPk = `USER#${user.sub}`;
+    const userSk = `GROUP#${groupId}`;
+
     await ddb.send(
       new TransactWriteCommand({
         TransactItems: [

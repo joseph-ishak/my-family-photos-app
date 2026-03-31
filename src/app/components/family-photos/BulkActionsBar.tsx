@@ -172,12 +172,12 @@ export default function BulkActionsBar({
         open={confirmOpen}
         onClose={deleting ? () => {} : () => setConfirmOpen(false)}
       >
-        <div className="w-full max-w-[520px] rounded-2xl border border-neutral-800 bg-neutral-950 p-6 shadow-xl">
+        <div className="w-full max-w-[520px] rounded-2xl border border-neutral-800 bg-neutral-950 p-6 shadow-xl text-neutral-100">
           <h3 className="text-lg font-semibold">Delete selected photos</h3>
 
           <p className="mt-2 text-sm text-neutral-300">
             This will permanently delete {selectedCount} photo
-            {selectedCount === 1 ? "" : "s"}.
+            {selectedCount === 1 ? "" : "s"}. This action cannot be undone.
           </p>
 
           <div className="mt-6 flex items-center justify-end gap-2">
@@ -185,7 +185,7 @@ export default function BulkActionsBar({
               type="button"
               onClick={() => setConfirmOpen(false)}
               disabled={deleting}
-              className="rounded-xl border border-neutral-800 px-4 py-2 text-sm hover:bg-neutral-900 transition disabled:opacity-50"
+              className="rounded-xl border border-neutral-800 px-4 py-2 text-sm text-neutral-200 hover:bg-neutral-900 transition disabled:opacity-50"
             >
               Cancel
             </button>

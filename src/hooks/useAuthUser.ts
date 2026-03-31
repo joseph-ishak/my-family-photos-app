@@ -26,12 +26,6 @@ export function useAuthUser(): AuthState {
           return;
         }
 
-        if (!data.user) {
-          setLoading(false);
-          router.replace("/login");
-          return;
-        }
-
         setUser(data.user);
         setLoading(false);
       })

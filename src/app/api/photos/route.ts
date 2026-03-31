@@ -1,28 +1,25 @@
 // src/app/api/photos/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   BatchGetCommand,
-  DynamoDBDocumentClient,
   QueryCommand,
   TransactWriteCommand,
   UpdateCommand,
   GetCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
-  S3Client,
   GetObjectCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getVerifiedUser } from "@/lib/auth-server";
-
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: "us-west-2" })
-);
-const s3 = new S3Client({ region: "us-west-2" });
+import { ddb, s3 } from "@/lib/db/client";
+import { asNonEmptyString, normalizeEventId, chunk } from "@/lib/utils";
+import { getUserGroupIds, getSharedEventIdsForUserGroups, getNicknamesForUsers } from "@/lib/db/access";
+import { requireTable } from "@/lib/api";
+import { encodeCursor, decodeCursor } from "@/lib/cursor";
 
 type DeleteItem = {
   pk: string;
@@ -32,37 +29,6 @@ type DeleteItem = {
 
 const MAX_ITEMS = 200;
 
-function chunk<T>(arr: T[], size: number) {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
-
-function asNonEmptyString(v: unknown) {
-  const s = typeof v === "string" ? v.trim() : "";
-  return s.length > 0 ? s : null;
-}
-
-function normalizeEventId(raw: unknown): string | null {
-  const v = typeof raw === "string" ? raw.trim() : "";
-  if (!v) return null;
-  if (v.toLowerCase() === "default") return null;
-  return v;
-}
-
-function decodeCursor(cursor: string | null) {
-  if (!cursor) return undefined;
-  try {
-    return JSON.parse(Buffer.from(cursor, "base64").toString("utf8"));
-  } catch {
-    return undefined;
-  }
-}
-
-function encodeCursor(lastEvaluated: any) {
-  if (!lastEvaluated) return null;
-  return Buffer.from(JSON.stringify(lastEvaluated), "utf8").toString("base64");
-}
 
 async function signGetUrl(key?: string) {
   if (!key) return undefined;
@@ -99,142 +65,23 @@ function inferMediaType(item: any): "photo" | "video" {
   return "photo";
 }
 
-async function getUserGroupIds(
-  table: string,
-  userSub: string
-): Promise<string[]> {
-  const res = await ddb.send(
-    new QueryCommand({
-      TableName: table,
-      KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
-      ExpressionAttributeValues: {
-        ":pk": `USER#${userSub}`,
-        ":skPrefix": "GROUP#",
-      },
-      ProjectionExpression: "groupId, SK",
-    })
-  );
-
-  const items = (res.Items ?? []) as any[];
-
-  const groupIds = items
-    .map((it) => {
-      const gid = asNonEmptyString(it?.groupId);
-      if (gid) return gid;
-      const sk = asNonEmptyString(it?.SK);
-      if (!sk) return null;
-      return sk.replace(/^GROUP#/, "");
-    })
-    .filter(Boolean) as string[];
-
-  return Array.from(new Set(groupIds));
-}
-
-async function getSharedEventIdsForUserGroups(
-  table: string,
-  eventIds: string[],
-  groupIds: string[]
-): Promise<Set<string>> {
-  const out = new Set<string>();
-  if (eventIds.length === 0) return out;
-  if (groupIds.length === 0) return out;
-
-  const keys: { PK: string; SK: string }[] = [];
-  for (const eventId of eventIds) {
-    for (const groupId of groupIds) {
-      keys.push({
-        PK: `EVENT#${eventId}`,
-        SK: `SHARE#GROUP#${groupId}`,
-      });
-    }
-  }
-
-  const chunks = chunk(keys, 100);
-
-  for (const c of chunks) {
-    const got = await ddb.send(
-      new BatchGetCommand({
-        RequestItems: {
-          [table]: {
-            Keys: c,
-            ProjectionExpression: "eventId, PK",
-          },
-        },
-      })
-    );
-
-    const found = got.Responses?.[table] ?? [];
-    for (const it of found as any[]) {
-      const eid = asNonEmptyString(it?.eventId);
-      if (eid) {
-        out.add(eid);
-        continue;
-      }
-      const pk = asNonEmptyString(it?.PK);
-      if (pk && pk.startsWith("EVENT#")) out.add(pk.replace(/^EVENT#/, ""));
-    }
-  }
-
-  return out;
-}
-
-async function getNicknamesForUsers(table: string, userIds: string[]) {
-  const out = new Map<string, string>();
-
-  const unique = Array.from(new Set(userIds.filter(Boolean)));
-  if (unique.length === 0) return out;
-
-  const keys = unique.map((sub) => ({ PK: `USER#${sub}`, SK: "PROFILE" }));
-  const chunks = chunk(keys, 100);
-
-  for (const c of chunks) {
-    const got = await ddb.send(
-      new BatchGetCommand({
-        RequestItems: {
-          [table]: {
-            Keys: c,
-            ProjectionExpression: "PK, nickname",
-          },
-        },
-      })
-    );
-
-    const found = got.Responses?.[table] ?? [];
-    for (const it of found as any[]) {
-      const pk = asNonEmptyString(it?.PK);
-      const nick = asNonEmptyString(it?.nickname);
-      if (!pk || !pk.startsWith("USER#") || !nick) continue;
-      const sub = pk.replace(/^USER#/, "");
-      out.set(sub, nick);
-    }
-  }
-
-  return out;
-}
-
 export async function GET(req: NextRequest) {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const table = process.env.DYNAMO_TABLE_NAME!;
-  if (!table) {
-    return NextResponse.json(
-      { error: "Server config missing" },
-      { status: 500 }
-    );
-  }
-
-  const { searchParams } = new URL(req.url);
-  const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 50);
-  const cursor = searchParams.get("cursor");
-  const requestedEventId = normalizeEventId(searchParams.get("eventId"));
-
-  const ExclusiveStartKey = decodeCursor(cursor);
-
   try {
-    const groupIds = await getUserGroupIds(table, user.sub);
+    const table = requireTable();
+
+    const { searchParams } = new URL(req.url);
+    const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 50);
+    const cursor = searchParams.get("cursor");
+    const requestedEventId = normalizeEventId(searchParams.get("eventId"));
+
+    const ExclusiveStartKey = decodeCursor(cursor);
+
+    const groupIds = await getUserGroupIds(ddb, table, user.sub);
 
     if (requestedEventId) {
       const ownerRes = await ddb.send(
@@ -249,6 +96,7 @@ export async function GET(req: NextRequest) {
       const isOwner = ownerUserId === user.sub;
 
       const sharedSet = await getSharedEventIdsForUserGroups(
+        ddb,
         table,
         [requestedEventId],
         groupIds
@@ -287,7 +135,7 @@ export async function GET(req: NextRequest) {
         .map((it) => asNonEmptyString(it?.ownerUserId))
         .filter(Boolean) as string[];
 
-      const nickByOwner = await getNicknamesForUsers(table, ownerIds);
+      const nickByOwner = await getNicknamesForUsers(ddb, table, ownerIds);
 
       const photos = await Promise.all(
         items.map(async (item: any) => {
@@ -367,6 +215,7 @@ export async function GET(req: NextRequest) {
     ) as string[];
 
     const sharedEvents = await getSharedEventIdsForUserGroups(
+      ddb,
       table,
       candidateEventIds,
       groupIds
@@ -384,7 +233,7 @@ export async function GET(req: NextRequest) {
       .map((it) => asNonEmptyString(it?.ownerUserId))
       .filter(Boolean) as string[];
 
-    const nickByOwner = await getNicknamesForUsers(table, ownerIds);
+    const nickByOwner = await getNicknamesForUsers(ddb, table, ownerIds);
 
     const photos = await Promise.all(
       visible.map(async (item: any) => {
@@ -465,7 +314,7 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    const table = process.env.DYNAMO_TABLE_NAME!;
+    const table = requireTable();
     const keys = items.map((i) => ({ PK: i.pk, SK: i.sk }));
 
     const keyChunks = chunk(keys, 100);

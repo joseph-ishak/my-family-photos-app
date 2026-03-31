@@ -1,17 +1,15 @@
 // src/app/api/events/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   BatchGetCommand,
-  DynamoDBDocumentClient,
   QueryCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { getVerifiedUser } from "@/lib/auth-server";
-
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: "us-west-2" })
-);
+import { ddb } from "@/lib/db/client";
+import { asNonEmptyString, normalizeEventId } from "@/lib/utils";
+import { getUserGroupIds, getSharedEventIdsForUserGroups } from "@/lib/db/access";
+import { requireTable } from "@/lib/api";
 
 type EventSummary = {
   eventId: string;
@@ -22,119 +20,16 @@ type EventSummary = {
   coverKey: string | null;
 };
 
-function normalizeEventId(raw: unknown): string | null {
-  const v = typeof raw === "string" ? raw.trim() : "";
-  if (!v) return null;
-  if (v.toLowerCase() === "default") return null;
-  return v;
-}
-
-function asNonEmptyString(v: unknown) {
-  const s = typeof v === "string" ? v.trim() : "";
-  return s.length > 0 ? s : null;
-}
-
-function chunk<T>(arr: T[], size: number) {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
-
-async function getUserGroupIds(
-  table: string,
-  userSub: string
-): Promise<string[]> {
-  const res = await ddb.send(
-    new QueryCommand({
-      TableName: table,
-      KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
-      ExpressionAttributeValues: {
-        ":pk": `USER#${userSub}`,
-        ":skPrefix": "GROUP#",
-      },
-      ProjectionExpression: "groupId, SK",
-    })
-  );
-
-  const items = (res.Items ?? []) as any[];
-
-  const groupIds = items
-    .map((it) => {
-      const gid = asNonEmptyString(it?.groupId);
-      if (gid) return gid;
-      const sk = asNonEmptyString(it?.SK);
-      if (!sk) return null;
-      return sk.replace(/^GROUP#/, "");
-    })
-    .filter(Boolean) as string[];
-
-  return Array.from(new Set(groupIds));
-}
-
-async function getSharedEventIdsForUserGroups(
-  table: string,
-  eventIds: string[],
-  groupIds: string[]
-): Promise<Set<string>> {
-  const out = new Set<string>();
-  if (eventIds.length === 0) return out;
-  if (groupIds.length === 0) return out;
-
-  const keys: { PK: string; SK: string }[] = [];
-  for (const eventId of eventIds) {
-    for (const groupId of groupIds) {
-      keys.push({
-        PK: `EVENT#${eventId}`,
-        SK: `SHARE#GROUP#${groupId}`,
-      });
-    }
-  }
-
-  const chunks = chunk(keys, 100);
-
-  for (const c of chunks) {
-    const got = await ddb.send(
-      new BatchGetCommand({
-        RequestItems: {
-          [table]: {
-            Keys: c,
-            ProjectionExpression: "eventId, PK",
-          },
-        },
-      })
-    );
-
-    const found = got.Responses?.[table] ?? [];
-    for (const it of found as any[]) {
-      const eid = asNonEmptyString(it?.eventId);
-      if (eid) {
-        out.add(eid);
-        continue;
-      }
-      const pk = asNonEmptyString(it?.PK);
-      if (pk && pk.startsWith("EVENT#")) out.add(pk.replace(/^EVENT#/, ""));
-    }
-  }
-
-  return out;
-}
-
 export async function GET(req: NextRequest) {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const table = process.env.DYNAMO_TABLE_NAME!;
-  if (!table) {
-    return NextResponse.json(
-      { error: "Server config missing" },
-      { status: 500 }
-    );
-  }
-
   try {
-    const groups = await getUserGroupIds(table, user.sub);
+    const table = requireTable();
+
+    const groups = await getUserGroupIds(ddb, table, user.sub);
 
     const result = await ddb.send(
       new QueryCommand({
@@ -205,6 +100,7 @@ export async function GET(req: NextRequest) {
     const notMine = allSummaries.filter((e) => e.ownerUserId !== user.sub);
 
     const sharedSet = await getSharedEventIdsForUserGroups(
+      ddb,
       table,
       notMine.map((e) => e.eventId),
       groups

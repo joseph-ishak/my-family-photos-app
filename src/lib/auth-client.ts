@@ -22,3 +22,17 @@ export async function getSession() {
   const data = await res.json().catch(() => null);
   return data?.user ?? null;
 }
+
+/**
+ * Attempts to silently refresh the access/idToken cookies using the stored
+ * refreshToken. Returns true on success, false if the refresh token is missing
+ * or has expired (requiring the user to log in again).
+ */
+export async function refreshSession(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/auth/refresh", { method: "POST" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

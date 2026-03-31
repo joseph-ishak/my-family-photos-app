@@ -1,23 +1,9 @@
 // src/hooks/usePhotoFeed.ts
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteScroll } from "./useInfiniteScroll";
+import type { Photo } from "@/types/photo";
 
-export type Photo = {
-  key: string;
-  url: string;
-  eventId?: string;
-  takenAt?: string;
-  ownerUserId?: string;
-  pk?: string;
-  sk?: string;
-  s3Key?: string;
-  mimeType?: string;
-
-  mediaType?: "photo" | "video";
-
-  thumbnailKey?: string;
-  thumbnailUrl?: string;
-};
+export type { Photo };
 
 type ApiPhotosResponse = {
   photos: Photo[];
@@ -65,6 +51,8 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   const loaderRef = useRef<HTMLDivElement | null>(null);
   const inFlightRef = useRef(false);
   const fetchedCursorsRef = useRef<Set<string>>(new Set());
+  // Incremented on every reset to discard results from stale in-flight fetches
+  const generationRef = useRef(0);
 
   const refreshEvents = useCallback(async () => {
     try {
@@ -96,6 +84,7 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     async (cursor?: string | null, serverEventId?: string) => {
       if (cursor === null) return;
 
+      const currentGen = generationRef.current;
       const cursorKey = `${serverEventId || ""}::${cursor ?? "__FIRST__"}`;
       if (inFlightRef.current) return;
       if (fetchedCursorsRef.current.has(cursorKey)) return;
@@ -116,17 +105,19 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
           cache: "no-store",
         });
 
+        // Discard results from fetches that started before the last reset
+        if (generationRef.current !== currentGen) return;
+
         if (!res.ok) {
           const text = await res.text().catch(() => "");
           console.error("GET /api/photos failed", res.status, text);
-
-          // Important change:
-          // Do not permanently disable infinite scroll on one failure.
-          // Allow user to scroll again and retry.
           return;
         }
 
         const data = (await res.json()) as ApiPhotosResponse;
+
+        // Final generation check before updating state
+        if (generationRef.current !== currentGen) return;
 
         setPhotos((prev) => {
           const seen = new Set(prev.map((p) => p.key));
@@ -141,24 +132,15 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
         });
 
         setNextCursor(data.nextCursor ?? null);
-
-        // Critical:
-        // Keep trying as long as cursor exists.
         setHasMore(Boolean(data.nextCursor));
-
-        // Debug
-        console.log("[usePhotosFeed] fetched", {
-          serverEventId: serverEventId || "",
-          got: (data.photos ?? []).length,
-          nextCursor: data.nextCursor,
-        });
       } catch (err) {
         console.error(err);
-
-        // Same rule: do not hard stop pagination here.
-        // Keep hasMore as is so the observer can retry.
       } finally {
-        inFlightRef.current = false;
+        // Only release the in-flight lock for the current generation;
+        // a stale fetch must not clear the lock for a newer fetch.
+        if (generationRef.current === currentGen) {
+          inFlightRef.current = false;
+        }
       }
     },
     [pageSize]
@@ -179,6 +161,11 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   }, [initialEventFilter]);
 
   useEffect(() => {
+    // Invalidate any in-flight fetch from a previous query context so its
+    // result cannot overwrite the state established by this reset.
+    generationRef.current += 1;
+    inFlightRef.current = false;
+
     setPhotos([]);
     setSelectedKeys([]);
     setHasMore(true);
@@ -405,6 +392,7 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     filteredPhotos,
 
     hasMore,
+    loadMore,
     loaderRef,
 
     deletePhoto,

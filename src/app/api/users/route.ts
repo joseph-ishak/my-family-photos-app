@@ -1,17 +1,11 @@
 // src/app/api/users/route.ts
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getVerifiedUser } from "@/lib/auth-server";
-
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: "us-west-2" })
-);
-
-const s3 = new S3Client({ region: "us-west-2" });
+import { ddb, s3 } from "@/lib/db/client";
 
 function safeStr(v: any) {
   return typeof v === "string" ? v : "";
