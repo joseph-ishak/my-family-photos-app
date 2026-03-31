@@ -16,6 +16,8 @@ import { PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
 import { requireTable, requireBucket, apiError, apiOk } from "@/lib/api";
+import { asNonEmptyString } from "@/lib/utils";
+import { Keys } from "@/lib/db/keys";
 
 function isValidMediaType(v: unknown): v is "photo" | "video" {
   return v === "photo" || v === "video";
@@ -63,6 +65,15 @@ export async function POST(req: NextRequest) {
   const bucket = requireBucket();
   const table = requireTable();
 
+  const profileRes = await ddb.send(
+    new GetCommand({
+      TableName: table,
+      Key: { PK: Keys.user(user.sub), SK: "PROFILE" },
+      ProjectionExpression: "nickname",
+    })
+  );
+  const ownerNickname = asNonEmptyString((profileRes.Item as any)?.nickname) ?? null;
+
   // Confirm the file actually landed in S3 before writing any metadata.
   // If the client lost connection mid-upload, HeadObject returns 404 and we
   // return a 422 so the client can retry rather than silently creating a
@@ -97,6 +108,7 @@ export async function POST(req: NextRequest) {
         mediaType,
         eventId,
         ownerUserId: user.sub,
+        ownerNickname,
         takenAt,
         uploadedAt: committedAt,
         s3Bucket: bucket,

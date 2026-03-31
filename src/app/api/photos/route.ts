@@ -17,7 +17,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
 import { asNonEmptyString, normalizeEventId, chunk } from "@/lib/utils";
-import { getUserGroupIds, getSharedEventIdsForUserGroups, getNicknamesForUsers } from "@/lib/db/access";
+import { getUserGroupIds, getSharedEventIdsForUserGroups } from "@/lib/db/access";
 import { requireTable } from "@/lib/api";
 import { encodeCursor, decodeCursor } from "@/lib/cursor";
 
@@ -124,18 +124,12 @@ export async function GET(req: NextRequest) {
           ScanIndexForward: false,
           ExclusiveStartKey,
           ProjectionExpression:
-            "PK, SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
+            "PK, SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, ownerNickname, mimeType, mediaType",
         })
       );
 
       const items = (result.Items ?? []) as any[];
       const lastEvaluated = result.LastEvaluatedKey ?? null;
-
-      const ownerIds = items
-        .map((it) => asNonEmptyString(it?.ownerUserId))
-        .filter(Boolean) as string[];
-
-      const nickByOwner = await getNicknamesForUsers(ddb, table, ownerIds);
 
       const photos = await Promise.all(
         items.map(async (item: any) => {
@@ -147,8 +141,6 @@ export async function GET(req: NextRequest) {
             ? previewUrlForKey(item.s3Key)
             : undefined;
 
-          const ownerUserId = asNonEmptyString(item.ownerUserId);
-
           return {
             key: item.s3Key,
             s3Key: item.s3Key,
@@ -159,10 +151,8 @@ export async function GET(req: NextRequest) {
             url,
             eventId: item.eventId,
             takenAt: item.takenAt,
-            ownerUserId: ownerUserId,
-            ownerNickname: ownerUserId
-              ? nickByOwner.get(ownerUserId) ?? null
-              : null,
+            ownerUserId: asNonEmptyString(item.ownerUserId),
+            ownerNickname: asNonEmptyString(item.ownerNickname) ?? null,
             pk: item.PK,
             sk: item.SK,
           };
@@ -187,7 +177,7 @@ export async function GET(req: NextRequest) {
         ScanIndexForward: false,
         ExclusiveStartKey,
         ProjectionExpression:
-          "PK, SK, GSI1PK, GSI1SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
+          "PK, SK, GSI1PK, GSI1SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, ownerNickname, mimeType, mediaType",
       })
     );
 
@@ -229,12 +219,6 @@ export async function GET(req: NextRequest) {
 
     const visible = [...owned, ...allowedNotOwned];
 
-    const ownerIds = visible
-      .map((it) => asNonEmptyString(it?.ownerUserId))
-      .filter(Boolean) as string[];
-
-    const nickByOwner = await getNicknamesForUsers(ddb, table, ownerIds);
-
     const photos = await Promise.all(
       visible.map(async (item: any) => {
         const url = await signGetUrl(item.s3Key);
@@ -244,8 +228,6 @@ export async function GET(req: NextRequest) {
           : item.s3Key
           ? previewUrlForKey(item.s3Key)
           : undefined;
-
-        const ownerUserId = asNonEmptyString(item.ownerUserId);
 
         return {
           key: item.s3Key,
@@ -257,10 +239,8 @@ export async function GET(req: NextRequest) {
           url,
           eventId: item.eventId,
           takenAt: item.takenAt,
-          ownerUserId: ownerUserId,
-          ownerNickname: ownerUserId
-            ? nickByOwner.get(ownerUserId) ?? null
-            : null,
+          ownerUserId: asNonEmptyString(item.ownerUserId),
+          ownerNickname: asNonEmptyString(item.ownerNickname) ?? null,
           pk: item.PK,
           sk: item.SK,
         };
