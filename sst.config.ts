@@ -58,6 +58,54 @@ export default $config({
       link: [uploads, table, previewsRouter],
     });
 
+    const alertEmail = process.env.ALERT_EMAIL;
+    if (alertEmail) {
+      const alertTopic = new aws.sns.Topic("AlertTopic", {
+        name: "family-photos-alerts",
+      });
+
+      new aws.sns.TopicSubscription("AlertEmailSubscription", {
+        topic: alertTopic.arn,
+        protocol: "email",
+        endpoint: alertEmail,
+      });
+
+      const functionName = site.nodes.server!.apply((fn) => fn.name);
+
+      // Alert when the Next.js Lambda throws any errors.
+      new aws.cloudwatch.MetricAlarm("LambdaErrorsAlarm", {
+        name: "family-photos-lambda-errors",
+        alarmDescription: "Next.js server Lambda is throwing errors",
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        dimensions: { FunctionName: functionName },
+        statistic: "Sum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 1,
+        comparisonOperator: "GreaterThanOrEqualToThreshold",
+        alarmActions: [alertTopic.arn],
+        treatMissingData: "notBreaching",
+      });
+
+      // Alert when DynamoDB starts throttling — usually means the table needs
+      // on-demand billing or a capacity increase.
+      new aws.cloudwatch.MetricAlarm("DynamoThrottlesAlarm", {
+        name: "family-photos-dynamo-throttles",
+        alarmDescription: "DynamoDB is throttling requests",
+        namespace: "AWS/DynamoDB",
+        metricName: "ThrottledRequests",
+        dimensions: { TableName: table.name },
+        statistic: "Sum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 1,
+        comparisonOperator: "GreaterThanOrEqualToThreshold",
+        alarmActions: [alertTopic.arn],
+        treatMissingData: "notBreaching",
+      });
+    }
+
     return {
       Url: site.url,
       PreviewsCdnUrl: previewsRouter.url,
