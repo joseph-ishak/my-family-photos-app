@@ -6,7 +6,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { v4 as uuidv4 } from "uuid";
 import { getVerifiedUser } from "@/lib/auth-server";
 import { s3 } from "@/lib/db/client";
-import { requireBucket } from "@/lib/api";
+import { requireBucket, withErrorHandler } from "@/lib/api";
 
 function isValidMediaType(value: unknown): value is "photo" | "video" {
   return value === "photo" || value === "video";
@@ -16,7 +16,7 @@ function isValidKind(value: unknown): value is "original" | "preview" {
   return value === "original" || value === "preview";
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandler("POST /api/upload-url", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -93,4 +93,4 @@ export async function POST(req: NextRequest) {
     filename: safeName,
     eventId: eventName,
   });
-}
+});

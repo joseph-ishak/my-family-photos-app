@@ -8,7 +8,7 @@ import {
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb } from "@/lib/db/client";
 import { asNonEmptyString, normalizeRole } from "@/lib/utils";
-import { requireTable } from "@/lib/api";
+import { requireTable, handleRouteError } from "@/lib/api";
 
 export async function POST(req: NextRequest, ctx: any) {
   const user = await getVerifiedUser(req);
@@ -112,19 +112,7 @@ export async function POST(req: NextRequest, ctx: any) {
     );
 
     return NextResponse.json({ success: true }, { status: 201 });
-  } catch (err: any) {
-    const msg = String(err?.message || "");
-    if (msg.includes("ConditionalCheckFailed")) {
-      return NextResponse.json(
-        { error: "User is already a member" },
-        { status: 409 }
-      );
-    }
-
-    console.error("POST /api/groups/[groupId]/members error", err);
-    return NextResponse.json(
-      { error: err?.message || "Add member failed" },
-      { status: 500 }
-    );
+  } catch (err) {
+    return handleRouteError("POST /api/groups/[groupId]/members", err);
   }
 }

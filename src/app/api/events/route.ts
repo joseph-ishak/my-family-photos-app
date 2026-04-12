@@ -9,7 +9,8 @@ import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb } from "@/lib/db/client";
 import { asNonEmptyString, normalizeEventId } from "@/lib/utils";
 import { getUserGroupIds, getSharedEventIdsForUserGroups } from "@/lib/db/access";
-import { requireTable } from "@/lib/api";
+import { requireTable, handleRouteError } from "@/lib/api";
+import { withDdbRetry } from "@/lib/db/retry";
 
 type EventSummary = {
   eventId: string;
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
 
     const groups = await getUserGroupIds(ddb, table, user.sub);
 
-    const result = await ddb.send(
+    const result = await withDdbRetry(() => ddb.send(
       new QueryCommand({
         TableName: table,
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
@@ -45,7 +46,7 @@ export async function GET(req: NextRequest) {
           "#name": "name",
         },
       })
-    );
+    ));
 
     const items = (result.Items ?? []) as any[];
 
@@ -118,7 +119,6 @@ export async function GET(req: NextRequest) {
       summaries: visible,
     });
   } catch (err) {
-    console.error("Error fetching events:", err);
-    return NextResponse.json({ events: [], summaries: [] }, { status: 500 });
+    return handleRouteError("GET /api/events", err);
   }
 }

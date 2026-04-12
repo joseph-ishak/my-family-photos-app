@@ -9,6 +9,7 @@ import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
+import { withErrorHandler } from "@/lib/api";
 
 function now() {
   return new Date().toISOString();
@@ -33,7 +34,7 @@ function defaultNickname(user: any) {
   return "User";
 }
 
-export async function GET(req: NextRequest) {
+export const GET = withErrorHandler("GET /api/profile", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -95,9 +96,9 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     profile: { ...profile, avatarUrl, profileComplete: complete },
   });
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withErrorHandler("PUT /api/profile", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -158,4 +159,4 @@ export async function PUT(req: NextRequest) {
   );
 
   return NextResponse.json({ profile: result.Attributes });
-}
+});

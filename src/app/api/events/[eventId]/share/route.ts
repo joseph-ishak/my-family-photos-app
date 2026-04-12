@@ -11,7 +11,7 @@ import {
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb } from "@/lib/db/client";
 import { asNonEmptyString, normalizeRole, chunk } from "@/lib/utils";
-import { requireTable } from "@/lib/api";
+import { requireTable, handleRouteError } from "@/lib/api";
 
 async function requireEventOwner(
   table: string,
@@ -153,12 +153,8 @@ export async function GET(req: NextRequest, ctx: any) {
     });
 
     return NextResponse.json({ shares });
-  } catch (err: any) {
-    console.error("GET /api/events/[eventId]/share error", err);
-    return NextResponse.json(
-      { error: err?.message || "Failed to load shares" },
-      { status: 500 }
-    );
+  } catch (err) {
+    return handleRouteError("GET /api/events/[eventId]/share", err);
   }
 }
 
@@ -266,20 +262,8 @@ export async function POST(req: NextRequest, ctx: any) {
       { success: true, eventId, groupId, createdAt: now },
       { status: 201 }
     );
-  } catch (err: any) {
-    const msg = String(err?.message || "");
-    if (msg.includes("ConditionalCheckFailedException")) {
-      return NextResponse.json(
-        { error: "Already shared to that group" },
-        { status: 409 }
-      );
-    }
-
-    console.error("POST /api/events/[eventId]/share error", err);
-    return NextResponse.json(
-      { error: err?.message || "Share failed" },
-      { status: 500 }
-    );
+  } catch (err) {
+    return handleRouteError("POST /api/events/[eventId]/share", err);
   }
 }
 
@@ -339,11 +323,7 @@ export async function DELETE(req: NextRequest, ctx: any) {
     );
 
     return NextResponse.json({ success: true, eventId, groupId });
-  } catch (err: any) {
-    console.error("DELETE /api/events/[eventId]/share error", err);
-    return NextResponse.json(
-      { error: err?.message || "Unshare failed" },
-      { status: 500 }
-    );
+  } catch (err) {
+    return handleRouteError("DELETE /api/events/[eventId]/share", err);
   }
 }

@@ -1,5 +1,8 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
+const SECRET_ARN =
+  "arn:aws:secretsmanager:us-west-2:915209469707:secret:my-family-photos/secrets-DC3MUq";
+
 export default $config({
   app(input) {
     return {
@@ -47,15 +50,37 @@ export default $config({
 
     const site = new sst.aws.Nextjs("Site", {
       environment: {
-        S3_BUCKET_NAME: uploads.name,
+        // Infrastructure references — not sensitive
+        S3_BUCKET_NAME:    uploads.name,
         DYNAMO_TABLE_NAME: table.name,
-        COGNITO_USER_POOL_ID: process.env.COGNITO_USER_POOL_ID!,
-        COGNITO_APP_CLIENT_ID: process.env.COGNITO_APP_CLIENT_ID!,
-        COGNITO_REGION: process.env.COGNITO_REGION!,
+        PREVIEWS_CDN_URL:  previewsRouter.url,
 
-        PREVIEWS_CDN_URL: previewsRouter.url,
+        // Cognito — semi-public (also embedded in client-side Amplify config)
+        // Must stay as env vars — edge runtime (middleware) can't call Secrets Manager
+        COGNITO_USER_POOL_ID:  process.env.COGNITO_USER_POOL_ID!,
+        COGNITO_APP_CLIENT_ID: process.env.COGNITO_APP_CLIENT_ID!,
+        COGNITO_REGION:        process.env.COGNITO_REGION!,
+
+        // Tells Lambda where to fetch secrets at cold start
+        // CURSOR_SECRET and SENTRY_DSN are loaded from Secrets Manager at runtime
+        SECRETS_ARN: SECRET_ARN,
       },
       link: [uploads, table, previewsRouter],
+    });
+
+    // Grant the Lambda execution role permission to read the secret
+    new aws.iam.RolePolicy("SecretsManagerAccess", {
+      role: site.nodes.server.nodes.role.name,
+      policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Action: ["secretsmanager:GetSecretValue"],
+            Resource: SECRET_ARN,
+          },
+        ],
+      }),
     });
 
     const alertEmail = process.env.ALERT_EMAIL;

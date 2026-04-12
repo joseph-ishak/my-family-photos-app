@@ -18,7 +18,8 @@ import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
 import { asNonEmptyString, normalizeEventId, chunk } from "@/lib/utils";
 import { getUserGroupIds, getSharedEventIdsForUserGroups, getNicknamesForUsers } from "@/lib/db/access";
-import { requireTable } from "@/lib/api";
+import { requireTable, handleRouteError } from "@/lib/api";
+import { withDdbRetry } from "@/lib/db/retry";
 import { encodeCursor, decodeCursor } from "@/lib/cursor";
 
 type DeleteItem = {
@@ -78,6 +79,31 @@ export async function GET(req: NextRequest) {
     const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 50);
     const cursor = searchParams.get("cursor");
     const requestedEventId = normalizeEventId(searchParams.get("eventId"));
+    const mediaTypeParam = searchParams.get("mediaType");
+    const mediaTypeFilter =
+      mediaTypeParam === "photo" || mediaTypeParam === "video"
+        ? mediaTypeParam
+        : null;
+
+    // Build a FilterExpression that mirrors inferMediaType():
+    //   video  → mediaType = "video"  OR  mimeType begins_with "video/"
+    //   photo  → NOT (mediaType = "video" OR mimeType begins_with "video/")
+    // This handles older records that only have mimeType stored.
+    const mediaFilterExpr =
+      mediaTypeFilter === "video"
+        ? {
+            FilterExpression:
+              "mediaType = :mtVideo OR begins_with(mimeType, :mimeVideo)",
+            ExtraValues: { ":mtVideo": "video", ":mimeVideo": "video/" },
+          }
+        : mediaTypeFilter === "photo"
+        ? {
+            FilterExpression:
+              "(attribute_not_exists(mediaType) OR mediaType <> :mtVideo)" +
+              " AND (attribute_not_exists(mimeType) OR NOT begins_with(mimeType, :mimeVideo))",
+            ExtraValues: { ":mtVideo": "video", ":mimeVideo": "video/" },
+          }
+        : null;
 
     const ExclusiveStartKey = decodeCursor(cursor);
 
@@ -116,10 +142,21 @@ export async function GET(req: NextRequest) {
         new QueryCommand({
           TableName: table,
           KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
-          ExpressionAttributeValues: {
-            ":pk": pk,
-            ":skPrefix": "MEDIA#",
-          },
+          ...(mediaFilterExpr
+            ? {
+                FilterExpression: mediaFilterExpr.FilterExpression,
+                ExpressionAttributeValues: {
+                  ":pk": pk,
+                  ":skPrefix": "MEDIA#",
+                  ...mediaFilterExpr.ExtraValues,
+                },
+              }
+            : {
+                ExpressionAttributeValues: {
+                  ":pk": pk,
+                  ":skPrefix": "MEDIA#",
+                },
+              }),
           Limit: limit,
           ScanIndexForward: false,
           ExclusiveStartKey,
@@ -172,21 +209,31 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const gsiRes = await ddb.send(
+    const gsiRes = await withDdbRetry(() => ddb.send(
       new QueryCommand({
         TableName: table,
         IndexName: "GSI1",
         KeyConditionExpression: "GSI1PK = :pk",
-        ExpressionAttributeValues: {
-          ":pk": "PHOTO",
-        },
+        ...(mediaFilterExpr
+          ? {
+              FilterExpression: mediaFilterExpr.FilterExpression,
+              ExpressionAttributeValues: {
+                ":pk": "PHOTO",
+                ...mediaFilterExpr.ExtraValues,
+              },
+            }
+          : {
+              ExpressionAttributeValues: {
+                ":pk": "PHOTO",
+              },
+            }),
         Limit: limit,
         ScanIndexForward: false,
         ExclusiveStartKey,
         ProjectionExpression:
           "PK, SK, GSI1PK, GSI1SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
       })
-    );
+    ));
 
     const gsiItems = (gsiRes.Items ?? []) as any[];
     const lastEvaluated = gsiRes.LastEvaluatedKey ?? null;
@@ -266,8 +313,7 @@ export async function GET(req: NextRequest) {
       nextCursor: encodeCursor(lastEvaluated),
     });
   } catch (err) {
-    console.error("Error fetching photos:", err);
-    return NextResponse.json({ photos: [] }, { status: 500 });
+    return handleRouteError("GET /api/photos", err);
   }
 }
 
@@ -414,11 +460,7 @@ export async function DELETE(req: NextRequest) {
       deletedCount: deletable.length,
       requestedCount: items.length,
     });
-  } catch (err: any) {
-    console.error("DELETE /api/photos error", err);
-    return NextResponse.json(
-      { error: err?.message || "Delete failed" },
-      { status: 500 }
-    );
+  } catch (err) {
+    return handleRouteError("DELETE /api/photos", err);
   }
 }

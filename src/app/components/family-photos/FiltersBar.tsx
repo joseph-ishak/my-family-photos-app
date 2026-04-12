@@ -1,11 +1,15 @@
 "use client";
 
+type MediaFilter = "all" | "photo" | "video";
+
 type Props = {
   existingEvents: string[];
   eventFilter: string;
   dateFilter: string;
+  mediaFilter: MediaFilter;
   onEventChange: (value: string) => void;
   onDateChange: (value: string) => void;
+  onMediaChange: (value: MediaFilter) => void;
   onClear: () => void;
 };
 
@@ -20,15 +24,23 @@ const XIcon = () => (
   </svg>
 );
 
+const MEDIA_OPTIONS: { label: string; value: MediaFilter }[] = [
+  { label: "All",    value: "all"   },
+  { label: "Photos", value: "photo" },
+  { label: "Videos", value: "video" },
+];
+
 export default function FiltersBar({
   existingEvents,
   eventFilter,
   dateFilter,
+  mediaFilter,
   onEventChange,
   onDateChange,
+  onMediaChange,
   onClear,
 }: Props) {
-  const hasFilters = Boolean(eventFilter || dateFilter);
+  const hasFilters = Boolean(eventFilter || dateFilter || mediaFilter !== "all");
 
   return (
     <div className="rounded-2xl border border-neutral-900 bg-neutral-950/40 p-3 sm:p-4">
@@ -58,6 +70,23 @@ export default function FiltersBar({
               onChange={(e) => onDateChange(e.target.value)}
               className="h-11 rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 text-sm text-neutral-100 focus:outline-none focus:ring-2 focus:ring-neutral-300"
             />
+          </div>
+
+          {/* Media type segment control */}
+          <div className="flex items-center rounded-xl border border-neutral-800 bg-neutral-950/40 p-1 gap-0.5">
+            {MEDIA_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => onMediaChange(opt.value)}
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                  mediaFilter === opt.value
+                    ? "bg-neutral-700 text-neutral-100"
+                    : "text-neutral-400 hover:text-neutral-100"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
         </div>
 

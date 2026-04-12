@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { withErrorHandler } from "@/lib/api";
 
-export async function POST() {
+export const POST = withErrorHandler("POST /api/auth/logout", async () => {
   const res = NextResponse.json({ success: true }, { status: 200 });
   const secure = process.env.NODE_ENV === "production";
 
@@ -17,4 +19,4 @@ export async function POST() {
   res.cookies.set("refreshToken", "", base);
 
   return res;
-}
+});

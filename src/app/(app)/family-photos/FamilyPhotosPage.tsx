@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import PhotoUploadModal from "@/app/components/PhotoUploadModal";
-import PhotoLightbox from "@/app/components/PhotoLightbox";
+import PhotoSlideshow from "@/app/components/PhotoSlideshow";
 
 import GalleryHeader from "@/app/components/family-photos/GalleryHeader";
 import FiltersBar from "@/app/components/family-photos/FiltersBar";
@@ -54,6 +54,7 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
 
   const {
     existingEvents = [],
+    totalForCurrentEvent,
 
     selectedKeys = [],
     setSelectedKeys,
@@ -67,11 +68,15 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
     dateFilter,
     setDateFilter,
 
+    mediaFilter,
+    setMediaFilter,
+
     clearFilters,
 
     filteredPhotos = [],
 
     hasMore,
+    loadMore,
     loaderRef,
 
     deletePhoto,
@@ -117,9 +122,12 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
         lockedEventId={initialEventFilter}
       />
 
-      <PhotoLightbox
-        photo={expandedPhoto}
+      <PhotoSlideshow
+        photos={filteredPhotos}
+        openPhoto={expandedPhoto}
         onClose={() => setExpandedPhoto(null)}
+        loadMore={loadMore}
+        hasMore={hasMore}
       />
 
       <PhotoEditorModal
@@ -140,8 +148,10 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
         existingEvents={existingEvents}
         eventFilter={eventFilter}
         dateFilter={dateFilter}
+        mediaFilter={mediaFilter}
         onEventChange={setEventFilter}
         onDateChange={setDateFilter}
+        onMediaChange={setMediaFilter}
         onClear={clearFilters}
       />
 
@@ -152,6 +162,33 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
         onClearSelection={() => setSelectedKeys([])}
         onDeleteSelected={bulkDelete}
       />
+
+      {!isEmpty && (
+        <div className="flex items-center justify-between">
+          {/* Loaded / total counter — only shown when viewing a specific event */}
+          {totalForCurrentEvent !== null ? (
+            <span className="text-xs text-neutral-500 tabular-nums">
+              {filteredPhotos.length === totalForCurrentEvent ? (
+                <>All <span className="text-neutral-300">{totalForCurrentEvent}</span> loaded</>
+              ) : (
+                <><span className="text-neutral-300">{filteredPhotos.length}</span> of <span className="text-neutral-300">{totalForCurrentEvent}</span> loaded</>
+              )}
+            </span>
+          ) : (
+            <span />
+          )}
+
+          <button
+            onClick={() => setExpandedPhoto(filteredPhotos[0])}
+            className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition"
+          >
+            <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            Start slideshow
+          </button>
+        </div>
+      )}
 
       {isEmpty ? (
         <div className="py-10">
@@ -198,7 +235,9 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
 
           {!hasMore ? (
             <div className="py-10 text-center text-sm text-neutral-500">
-              You have reached the end.
+              {totalForCurrentEvent !== null
+                ? `All ${totalForCurrentEvent} items loaded.`
+                : "You have reached the end."}
             </div>
           ) : null}
         </>

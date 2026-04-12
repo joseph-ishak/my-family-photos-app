@@ -3,6 +3,7 @@ import { QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { getVerifiedUser } from "@/lib/auth-server";
 import type { NextRequest } from "next/server";
 import { ddb } from "@/lib/db/client";
+import { withErrorHandler } from "@/lib/api";
 
 const CF_BASE = (process.env.NEXT_PUBLIC_PREVIEWS_CDN_URL || "").replace(
   /\/$/,
@@ -14,7 +15,7 @@ function buildCdnUrl(key?: string | null) {
   return `${CF_BASE}/${encodeURI(key)}`;
 }
 
-export async function GET(req: NextRequest) {
+export const GET = withErrorHandler("GET /api/events/summaries", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -89,4 +90,4 @@ export async function GET(req: NextRequest) {
   });
 
   return NextResponse.json({ events: summaries });
-}
+});

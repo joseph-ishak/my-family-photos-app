@@ -31,6 +31,7 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   const initialEvent = safeEventId(initialEventFilter ?? "");
 
   const [existingEvents, setExistingEvents] = useState<string[]>([]);
+  const [photoCountByEvent, setPhotoCountByEvent] = useState<Record<string, number>>({});
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
 
@@ -42,10 +43,12 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
 
   const [eventFilter, setEventFilter] = useState(initialEvent);
   const [dateFilter, setDateFilter] = useState("");
+  const [mediaFilter, setMediaFilter] = useState<"all" | "photo" | "video">("all");
 
   const clearFilters = useCallback(() => {
     setEventFilter("");
     setDateFilter("");
+    setMediaFilter("all");
   }, []);
 
   const loaderRef = useRef<HTMLDivElement | null>(null);
@@ -66,6 +69,13 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
         )
         .filter(Boolean) as string[];
 
+      const countMap: Record<string, number> = {};
+      for (const s of summaries) {
+        const id = typeof s?.eventId === "string" ? s.eventId.trim() : "";
+        if (id && typeof s?.photoCount === "number") countMap[id] = s.photoCount;
+      }
+      setPhotoCountByEvent(countMap);
+
       const events = Array.isArray(d?.events) ? d.events : [];
       const idsFromEvents = events
         .map((v: any) => (typeof v === "string" ? v.trim() : ""))
@@ -81,11 +91,11 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   }, []);
 
   const fetchPage = useCallback(
-    async (cursor?: string | null, serverEventId?: string) => {
+    async (cursor?: string | null, serverEventId?: string, serverMediaFilter?: string) => {
       if (cursor === null) return;
 
       const currentGen = generationRef.current;
-      const cursorKey = `${serverEventId || ""}::${cursor ?? "__FIRST__"}`;
+      const cursorKey = `${serverEventId || ""}::${serverMediaFilter || ""}::${cursor ?? "__FIRST__"}`;
       if (inFlightRef.current) return;
       if (fetchedCursorsRef.current.has(cursorKey)) return;
 
@@ -97,6 +107,7 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
         params.set("limit", String(pageSize));
         if (cursor && cursor.length > 0) params.set("cursor", cursor);
         if (serverEventId) params.set("eventId", serverEventId);
+        if (serverMediaFilter) params.set("mediaType", serverMediaFilter);
 
         const url = `/api/photos?${params.toString()}`;
 
@@ -152,10 +163,13 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     return existingEvents.includes(v) ? v : "";
   }, [eventFilter, existingEvents]);
 
+  const serverMediaFilter = mediaFilter === "all" ? "" : mediaFilter;
+
   useEffect(() => {
     const next = safeEventId(initialEventFilter ?? "");
     setEventFilter(next);
     setDateFilter("");
+    setMediaFilter("all");
     setSelectedKeys([]);
     setExpandedPhoto(null);
   }, [initialEventFilter]);
@@ -172,21 +186,30 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     setNextCursor(null);
     fetchedCursorsRef.current.clear();
 
-    fetchPage(undefined, serverEventId || undefined);
+    fetchPage(undefined, serverEventId || undefined, serverMediaFilter || undefined);
     refreshEvents();
-  }, [fetchPage, refreshEvents, serverEventId]);
+  }, [fetchPage, refreshEvents, serverEventId, serverMediaFilter]);
+
+  // Keep refs to the latest cursor/hasMore so canLoadMore never reads stale
+  // state from a closure — particularly important when sparse filtered pages
+  // leave the loader visible and the interval fires immediately after a reset.
+  const nextCursorRef = useRef(nextCursor);
+  const hasMoreRef = useRef(hasMore);
+  useEffect(() => { nextCursorRef.current = nextCursor; }, [nextCursor]);
+  useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
 
   const loadMore = useCallback(() => {
-    if (!hasMore) return;
-    if (!nextCursor) return;
+    if (!hasMoreRef.current) return;
+    const cursor = nextCursorRef.current;
+    if (!cursor) return;
     if (inFlightRef.current) return;
-    fetchPage(nextCursor, serverEventId || undefined);
-  }, [fetchPage, hasMore, nextCursor, serverEventId]);
+    fetchPage(cursor, serverEventId || undefined, serverMediaFilter || undefined);
+  }, [fetchPage, serverEventId, serverMediaFilter]);
 
   useInfiniteScroll({
     loaderRef,
     enabled: hasMore,
-    canLoadMore: () => !inFlightRef.current && hasMore && Boolean(nextCursor),
+    canLoadMore: () => !inFlightRef.current && hasMoreRef.current && Boolean(nextCursorRef.current),
     onLoadMore: loadMore,
   });
 
@@ -298,9 +321,9 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     setHasMore(true);
     setNextCursor(null);
     fetchedCursorsRef.current.clear();
-    fetchPage(undefined, serverEventId || undefined);
+    fetchPage(undefined, serverEventId || undefined, serverMediaFilter || undefined);
     refreshEvents();
-  }, [fetchPage, refreshEvents, serverEventId]);
+  }, [fetchPage, refreshEvents, serverEventId, serverMediaFilter]);
 
   const updatePhotoUrl = useCallback((key: string, url: string) => {
     setPhotos((prev) => prev.map((p) => (p.key === key ? { ...p, url } : p)));
@@ -372,8 +395,12 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     [updatePhotoUrl]
   );
 
+  const totalForCurrentEvent: number | null =
+    serverEventId ? (photoCountByEvent[serverEventId] ?? null) : null;
+
   return {
     existingEvents,
+    totalForCurrentEvent,
 
     selectedKeys,
     setSelectedKeys,
@@ -386,6 +413,9 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
 
     dateFilter,
     setDateFilter,
+
+    mediaFilter,
+    setMediaFilter,
 
     clearFilters,
 

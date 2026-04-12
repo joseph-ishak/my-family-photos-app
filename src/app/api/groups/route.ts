@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb } from "@/lib/db/client";
 import { asNonEmptyString, GroupRole } from "@/lib/utils";
-import { requireTable } from "@/lib/api";
+import { requireTable, handleRouteError } from "@/lib/api";
 
 export async function GET(req: NextRequest) {
   const user = await getVerifiedUser(req);
@@ -67,8 +67,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ groups });
   } catch (err) {
-    console.error("GET /api/groups error", err);
-    return NextResponse.json({ groups: [] }, { status: 500 });
+    return handleRouteError("GET /api/groups", err);
   }
 }
 
@@ -162,11 +161,7 @@ export async function POST(req: NextRequest) {
       },
       { status: 201 }
     );
-  } catch (err: any) {
-    console.error("POST /api/groups error", err);
-    return NextResponse.json(
-      { error: err?.message || "Create failed" },
-      { status: 500 }
-    );
+  } catch (err) {
+    return handleRouteError("POST /api/groups", err);
   }
 }

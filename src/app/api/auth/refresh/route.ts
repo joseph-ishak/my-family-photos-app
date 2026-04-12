@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { InitiateAuthCommand } from "@aws-sdk/client-cognito-identity-provider";
 import { cognito } from "@/lib/db/client";
+import { handleRouteError } from "@/lib/api";
 
 export async function POST(req: NextRequest) {
   const refreshToken = req.cookies.get("refreshToken")?.value;
@@ -50,11 +51,7 @@ export async function POST(req: NextRequest) {
     // the existing one remains valid until its own expiry.
 
     return res;
-  } catch (err: any) {
-    console.error("Token refresh error:", err);
-    return NextResponse.json(
-      { error: err?.message || "Refresh failed" },
-      { status: 401 }
-    );
+  } catch (err) {
+    return handleRouteError("POST /api/auth/refresh", err);
   }
 }

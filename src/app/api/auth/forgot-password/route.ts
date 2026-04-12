@@ -3,6 +3,7 @@ import {
   ForgotPasswordCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { cognito } from "@/lib/db/client";
+import { handleRouteError } from "@/lib/api";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({} as any));
@@ -22,11 +23,7 @@ export async function POST(req: NextRequest) {
     );
 
     return NextResponse.json({ success: true }, { status: 200 });
-  } catch (err: any) {
-    console.error("Cognito forgot password error:", err);
-    return NextResponse.json(
-      { error: err?.message || "Forgot password failed" },
-      { status: 400 }
-    );
+  } catch (err) {
+    return handleRouteError("POST /api/auth/forgot-password", err);
   }
 }

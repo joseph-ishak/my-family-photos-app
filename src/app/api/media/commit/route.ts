@@ -15,13 +15,13 @@ import { HeadObjectCommand } from "@aws-sdk/client-s3";
 import { PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
-import { requireTable, requireBucket, apiError, apiOk } from "@/lib/api";
+import { requireTable, requireBucket, apiError, apiOk, withErrorHandler } from "@/lib/api";
 
 function isValidMediaType(v: unknown): v is "photo" | "video" {
   return v === "photo" || v === "video";
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandler("POST /api/media/commit", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return apiError("Unauthorized", 401);
@@ -127,4 +127,4 @@ export async function POST(req: NextRequest) {
   );
 
   return apiOk({ mediaId, committed: true });
-}
+});

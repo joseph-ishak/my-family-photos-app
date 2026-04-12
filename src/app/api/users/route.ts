@@ -1,11 +1,13 @@
 // src/app/api/users/route.ts
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
+import { withErrorHandler } from "@/lib/api";
+import { withDdbRetry } from "@/lib/db/retry";
 
 function safeStr(v: any) {
   return typeof v === "string" ? v : "";
@@ -35,7 +37,7 @@ function matchesQuery(u: any, q: string) {
   return hay.includes(q);
 }
 
-export async function GET(req: NextRequest) {
+export const GET = withErrorHandler("GET /api/users", async (req: NextRequest) => {
   const me = await getVerifiedUser(req);
   if (!me?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -51,23 +53,28 @@ export async function GET(req: NextRequest) {
   const out: any[] = [];
   let lastKey: any = undefined;
 
-  // For family sized user counts, Scan is fine.
-  // We scan PROFILE items and filter in memory.
+  // Query GSI2 (entityType = "PROFILE", sorted by username) instead of
+  // scanning the whole table. When the caller provides a query string we
+  // use begins_with on username for DynamoDB-level prefix filtering, then
+  // do a lightweight in-memory pass to also match firstName/lastName/nickname.
+  const hasPrefix = query.length > 0;
+
   while (out.length < limit) {
-    const r = await ddb.send(
-      new ScanCommand({
+    const r = await withDdbRetry(() => ddb.send(
+      new QueryCommand({
         TableName: process.env.DYNAMO_TABLE_NAME!,
+        IndexName: "GSI2",
         ExclusiveStartKey: lastKey,
-        FilterExpression: "entityType = :t AND SK = :sk",
-        ExpressionAttributeValues: {
-          ":t": "PROFILE",
-          ":sk": "PROFILE",
-        },
+        KeyConditionExpression: hasPrefix
+          ? "entityType = :t AND begins_with(username, :prefix)"
+          : "entityType = :t",
+        ExpressionAttributeValues: hasPrefix
+          ? { ":t": "PROFILE", ":prefix": query }
+          : { ":t": "PROFILE" },
         ProjectionExpression:
           "PK, SK, firstName, lastName, nickname, username, avatarKey, entityType",
-        Limit: 200,
       })
-    );
+    ));
 
     const items = Array.isArray(r.Items) ? r.Items : [];
     for (const item of items) {
@@ -111,4 +118,4 @@ export async function GET(req: NextRequest) {
   });
 
   return NextResponse.json({ users });
-}
+});

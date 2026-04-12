@@ -8,7 +8,7 @@ import {
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb } from "@/lib/db/client";
 import { asNonEmptyString, normalizeRole } from "@/lib/utils";
-import { requireTable } from "@/lib/api";
+import { requireTable, handleRouteError } from "@/lib/api";
 
 export async function DELETE(req: NextRequest, ctx: any) {
   const user = await getVerifiedUser(req);
@@ -88,11 +88,7 @@ export async function DELETE(req: NextRequest, ctx: any) {
     );
 
     return NextResponse.json({ success: true });
-  } catch (err: any) {
-    console.error("DELETE /api/groups/[groupId]/members/[userId] error", err);
-    return NextResponse.json(
-      { error: err?.message || "Remove failed" },
-      { status: 500 }
-    );
+  } catch (err) {
+    return handleRouteError("DELETE /api/groups/[groupId]/members/[userId]", err);
   }
 }

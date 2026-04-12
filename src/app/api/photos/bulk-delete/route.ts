@@ -8,7 +8,7 @@ import { DeleteObjectsCommand } from "@aws-sdk/client-s3";
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
 import { chunk } from "@/lib/utils";
-import { requireTable, requireBucket } from "@/lib/api";
+import { requireTable, requireBucket, withErrorHandler } from "@/lib/api";
 
 type DeleteItem = {
   pk: string;
@@ -18,7 +18,7 @@ type DeleteItem = {
 
 const MAX_ITEMS = 200;
 
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandler("POST /api/photos/bulk-delete", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -99,4 +99,4 @@ export async function POST(req: NextRequest) {
     success: true,
     deletedCount: deletable.length,
   });
-}
+});

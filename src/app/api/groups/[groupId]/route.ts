@@ -9,7 +9,7 @@ import {
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb } from "@/lib/db/client";
 import { asNonEmptyString, normalizeRole } from "@/lib/utils";
-import { requireTable } from "@/lib/api";
+import { requireTable, handleRouteError } from "@/lib/api";
 
 async function getMyMembership(table: string, groupId: string, userId: string) {
   const res = await ddb.send(
@@ -101,12 +101,8 @@ export async function GET(req: NextRequest, ctx: any) {
     };
 
     return NextResponse.json({ group, members });
-  } catch (err: any) {
-    console.error("GET /api/groups/[groupId] error", err);
-    return NextResponse.json(
-      { error: err?.message || "Failed to load group" },
-      { status: 500 }
-    );
+  } catch (err) {
+    return handleRouteError("GET /api/groups/[groupId]", err);
   }
 }
 
@@ -189,11 +185,7 @@ export async function PUT(req: NextRequest, ctx: any) {
     }
 
     return NextResponse.json({ success: true, groupId, name, updatedAt: now });
-  } catch (err: any) {
-    console.error("PUT /api/groups/[groupId] error", err);
-    return NextResponse.json(
-      { error: err?.message || "Rename failed" },
-      { status: 500 }
-    );
+  } catch (err) {
+    return handleRouteError("PUT /api/groups/[groupId]", err);
   }
 }

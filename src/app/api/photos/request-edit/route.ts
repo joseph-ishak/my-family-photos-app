@@ -6,9 +6,9 @@ import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
-import { requireTable, requireBucket } from "@/lib/api";
+import { requireTable, requireBucket, withErrorHandler } from "@/lib/api";
 
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandler("POST /api/photos/request-edit", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -56,4 +56,4 @@ export async function POST(req: NextRequest) {
   const signedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
 
   return NextResponse.json({ signedUrl });
-}
+});

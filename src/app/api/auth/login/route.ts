@@ -4,6 +4,7 @@ import {
   RespondToAuthChallengeCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { cognito } from "@/lib/db/client";
+import { handleRouteError } from "@/lib/api";
 
 export async function POST(req: NextRequest) {
   const { username, password, newPassword } = await req.json();
@@ -92,11 +93,7 @@ export async function POST(req: NextRequest) {
     }
 
     return res;
-  } catch (err: any) {
-    console.error("Cognito login error:", err);
-    return NextResponse.json(
-      { error: err?.message || "Login failed" },
-      { status: 400 }
-    );
+  } catch (err) {
+    return handleRouteError("POST /api/auth/login", err);
   }
 }
