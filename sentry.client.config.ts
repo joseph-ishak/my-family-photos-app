@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
+import { scrubEvent } from "@/lib/sentry-scrubber";
 
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -8,4 +9,8 @@ Sentry.init({
 
   // Only show Sentry debug output in development
   debug: false,
+
+  beforeSend(event) {
+    return scrubEvent(event);
+  },
 });

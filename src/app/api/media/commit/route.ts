@@ -16,6 +16,7 @@ import { PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
 import { requireTable, requireBucket, apiError, apiOk, withErrorHandler } from "@/lib/api";
+import { normalizeEventId } from "@/lib/utils";
 
 function isValidMediaType(v: unknown): v is "photo" | "video" {
   return v === "photo" || v === "video";
@@ -43,6 +44,13 @@ export const POST = withErrorHandler("POST /api/media/commit", async (req: NextR
 
   if (!mediaId || !sk || !s3Key || !eventId || !takenAt || !mimeType || !filename) {
     return apiError("Missing required fields", 400);
+  }
+
+  // Normalize eventId the same way upload-url does — rejects whitespace-only
+  // values and ensures the PK matches the event record exactly.
+  const safeEventId = normalizeEventId(eventId);
+  if (!safeEventId) {
+    return apiError("Invalid eventId", 400);
   }
 
   if (!isValidMediaType(mediaType)) {
@@ -81,13 +89,14 @@ export const POST = withErrorHandler("POST /api/media/commit", async (req: NextR
   }
 
   const committedAt = new Date().toISOString();
-  const coverKey = thumbnailKey ?? s3Key;
+  // Only use thumbnailKey as the cover — never the raw s3Key (which is not CDN-served).
+  const coverKey = thumbnailKey ?? null;
 
   await ddb.send(
     new PutCommand({
       TableName: table,
       Item: {
-        PK: `EVENT#${eventId}`,
+        PK: `EVENT#${safeEventId}`,
         SK: sk,
 
         GSI1PK: "PHOTO",
@@ -95,7 +104,7 @@ export const POST = withErrorHandler("POST /api/media/commit", async (req: NextR
 
         mediaId,
         mediaType,
-        eventId,
+        eventId: safeEventId,
         ownerUserId: user.sub,
         takenAt,
         uploadedAt: committedAt,
@@ -108,19 +117,25 @@ export const POST = withErrorHandler("POST /api/media/commit", async (req: NextR
     })
   );
 
+  // coverKey uses if_not_exists so the first uploaded photo's thumbnail becomes
+  // the event cover and stays stable as more photos are added.
+  const coverExpression = coverKey
+    ? "coverKey = if_not_exists(coverKey, :coverKey), "
+    : "";
+
   await ddb.send(
     new UpdateCommand({
       TableName: table,
-      Key: { PK: "EVENT", SK: `EVENT#${eventId}` },
+      Key: { PK: "EVENT", SK: `EVENT#${safeEventId}` },
       UpdateExpression:
-        "ADD photoCount :one SET updatedAt = :now, createdAt = if_not_exists(createdAt, :now), #name = if_not_exists(#name, :name), eventId = if_not_exists(eventId, :eventId), coverKey = :coverKey, ownerUserId = if_not_exists(ownerUserId, :owner)",
+        `ADD photoCount :one SET updatedAt = :now, createdAt = if_not_exists(createdAt, :now), #name = if_not_exists(#name, :name), eventId = if_not_exists(eventId, :eventId), ${coverExpression}ownerUserId = if_not_exists(ownerUserId, :owner)`,
       ExpressionAttributeNames: { "#name": "name" },
       ExpressionAttributeValues: {
         ":one": 1,
         ":now": committedAt,
-        ":name": eventId,
-        ":eventId": eventId,
-        ":coverKey": coverKey,
+        ":name": safeEventId,
+        ":eventId": safeEventId,
+        ...(coverKey ? { ":coverKey": coverKey } : {}),
         ":owner": user.sub,
       },
     })

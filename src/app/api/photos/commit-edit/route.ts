@@ -52,14 +52,19 @@ export const POST = withErrorHandler("POST /api/photos/commit-edit", async (req:
 
   const editedAt = new Date().toISOString();
 
+  // ConditionExpression closes the TOCTOU window: even if ownership changed
+  // between the GetCommand above and this write, the update will fail safely.
   await ddb.send(
     new UpdateCommand({
       TableName: table,
       Key: { PK: pk, SK: sk },
       UpdateExpression: "SET editedAt = :t, mimeType = :m",
+      ConditionExpression: "ownerUserId = :owner AND s3Key = :key",
       ExpressionAttributeValues: {
         ":t": editedAt,
         ":m": filetype,
+        ":owner": user.sub,
+        ":key": s3Key,
       },
     })
   );

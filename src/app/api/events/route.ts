@@ -9,7 +9,7 @@ import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb } from "@/lib/db/client";
 import { asNonEmptyString, normalizeEventId } from "@/lib/utils";
 import { getUserGroupIds, getSharedEventIdsForUserGroups } from "@/lib/db/access";
-import { requireTable, handleRouteError } from "@/lib/api";
+import { requireTable, withErrorHandler } from "@/lib/api";
 import { withDdbRetry } from "@/lib/db/retry";
 
 type EventSummary = {
@@ -21,104 +21,100 @@ type EventSummary = {
   coverKey: string | null;
 };
 
-export async function GET(req: NextRequest) {
+export const GET = withErrorHandler("GET /api/events", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  try {
-    const table = requireTable();
+  const table = requireTable();
 
-    const groups = await getUserGroupIds(ddb, table, user.sub);
+  const groups = await getUserGroupIds(ddb, table, user.sub);
 
-    const result = await withDdbRetry(() => ddb.send(
-      new QueryCommand({
-        TableName: table,
-        KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
-        ExpressionAttributeValues: {
-          ":pk": "EVENT",
-          ":skPrefix": "EVENT#",
-        },
-        ProjectionExpression:
-          "eventId, #name, createdAt, updatedAt, photoCount, coverKey, ownerUserId, SK",
-        ExpressionAttributeNames: {
-          "#name": "name",
-        },
+  const result = await withDdbRetry(() => ddb.send(
+    new QueryCommand({
+      TableName: table,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+      ExpressionAttributeValues: {
+        ":pk": "EVENT",
+        ":skPrefix": "EVENT#",
+      },
+      ProjectionExpression:
+        "eventId, #name, createdAt, updatedAt, photoCount, coverKey, ownerUserId, SK",
+      ExpressionAttributeNames: {
+        "#name": "name",
+      },
+    })
+  ));
+
+  const items = (result.Items ?? []) as any[];
+
+  const allSummaries: (EventSummary & { ownerUserId?: string | null })[] =
+    items
+      .map((item) => {
+        const eventId =
+          normalizeEventId(item?.eventId) ??
+          normalizeEventId(
+            typeof item?.SK === "string" ? item.SK.replace(/^EVENT#/, "") : ""
+          );
+
+        if (!eventId) return null;
+
+        const nameRaw =
+          typeof item?.name === "string" && item.name.trim()
+            ? item.name.trim()
+            : eventId;
+
+        const createdAt =
+          typeof item?.createdAt === "string" ? item.createdAt : null;
+
+        const updatedAt =
+          typeof item?.updatedAt === "string" ? item.updatedAt : null;
+
+        const photoCount =
+          typeof item?.photoCount === "number" ? item.photoCount : 0;
+
+        const coverKey =
+          typeof item?.coverKey === "string" && item.coverKey.trim()
+            ? item.coverKey.trim()
+            : null;
+
+        const ownerUserId =
+          typeof item?.ownerUserId === "string" && item.ownerUserId.trim()
+            ? item.ownerUserId.trim()
+            : null;
+
+        return {
+          eventId,
+          name: nameRaw,
+          createdAt,
+          updatedAt,
+          photoCount,
+          coverKey,
+          ownerUserId,
+        };
       })
-    ));
+      .filter(Boolean) as (EventSummary & { ownerUserId?: string | null })[];
 
-    const items = (result.Items ?? []) as any[];
+  const mine = allSummaries.filter((e) => e.ownerUserId === user.sub);
+  const notMine = allSummaries.filter((e) => e.ownerUserId !== user.sub);
 
-    const allSummaries: (EventSummary & { ownerUserId?: string | null })[] =
-      items
-        .map((item) => {
-          const eventId =
-            normalizeEventId(item?.eventId) ??
-            normalizeEventId(
-              typeof item?.SK === "string" ? item.SK.replace(/^EVENT#/, "") : ""
-            );
+  const sharedSet = await getSharedEventIdsForUserGroups(
+    ddb,
+    table,
+    notMine.map((e) => e.eventId),
+    groups
+  );
 
-          if (!eventId) return null;
+  const visible = [
+    ...mine,
+    ...notMine.filter((e) => sharedSet.has(e.eventId)),
+  ].map(({ ownerUserId, ...rest }) => rest);
 
-          const nameRaw =
-            typeof item?.name === "string" && item.name.trim()
-              ? item.name.trim()
-              : eventId;
+  visible.sort((a, b) => a.name.localeCompare(b.name));
 
-          const createdAt =
-            typeof item?.createdAt === "string" ? item.createdAt : null;
-
-          const updatedAt =
-            typeof item?.updatedAt === "string" ? item.updatedAt : null;
-
-          const photoCount =
-            typeof item?.photoCount === "number" ? item.photoCount : 0;
-
-          const coverKey =
-            typeof item?.coverKey === "string" && item.coverKey.trim()
-              ? item.coverKey.trim()
-              : null;
-
-          const ownerUserId =
-            typeof item?.ownerUserId === "string" && item.ownerUserId.trim()
-              ? item.ownerUserId.trim()
-              : null;
-
-          return {
-            eventId,
-            name: nameRaw,
-            createdAt,
-            updatedAt,
-            photoCount,
-            coverKey,
-            ownerUserId,
-          };
-        })
-        .filter(Boolean) as (EventSummary & { ownerUserId?: string | null })[];
-
-    const mine = allSummaries.filter((e) => e.ownerUserId === user.sub);
-    const notMine = allSummaries.filter((e) => e.ownerUserId !== user.sub);
-
-    const sharedSet = await getSharedEventIdsForUserGroups(
-      ddb,
-      table,
-      notMine.map((e) => e.eventId),
-      groups
-    );
-
-    const visible = [
-      ...mine,
-      ...notMine.filter((e) => sharedSet.has(e.eventId)),
-    ].map(({ ownerUserId, ...rest }) => rest);
-
-    visible.sort((a, b) => a.name.localeCompare(b.name));
-
-    return NextResponse.json({
-      events: visible.map((e) => e.eventId),
-      summaries: visible,
-    });
-  } catch (err) {
-    return handleRouteError("GET /api/events", err);
-  }
-}
+  return NextResponse.json({
+    events: visible.map((e) => e.eventId),
+    summaries: visible,
+  });
+});

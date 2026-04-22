@@ -3,9 +3,9 @@ import {
   ForgotPasswordCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { cognito } from "@/lib/db/client";
-import { handleRouteError } from "@/lib/api";
+import { withErrorHandler } from "@/lib/api";
 
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandler("POST /api/auth/forgot-password", async (req: NextRequest) => {
   const body = await req.json().catch(() => ({} as any));
   const username =
     typeof body?.username === "string" ? body.username.trim() : "";
@@ -14,16 +14,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing username" }, { status: 400 });
   }
 
-  try {
-    await cognito.send(
-      new ForgotPasswordCommand({
-        ClientId: process.env.COGNITO_APP_CLIENT_ID!,
-        Username: username,
-      })
-    );
+  await cognito.send(
+    new ForgotPasswordCommand({
+      ClientId: process.env.COGNITO_APP_CLIENT_ID!,
+      Username: username,
+    })
+  );
 
-    return NextResponse.json({ success: true }, { status: 200 });
-  } catch (err) {
-    return handleRouteError("POST /api/auth/forgot-password", err);
-  }
-}
+  return NextResponse.json({ success: true }, { status: 200 });
+});

@@ -18,7 +18,7 @@ import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
 import { asNonEmptyString, normalizeEventId, chunk } from "@/lib/utils";
 import { getUserGroupIds, getSharedEventIdsForUserGroups, getNicknamesForUsers } from "@/lib/db/access";
-import { requireTable, handleRouteError } from "@/lib/api";
+import { requireTable, withErrorHandler } from "@/lib/api";
 import { withDdbRetry } from "@/lib/db/retry";
 import { encodeCursor, decodeCursor } from "@/lib/cursor";
 
@@ -45,7 +45,8 @@ async function signGetUrl(key?: string) {
 
 function toPreviewPath(key: string) {
   if (key.startsWith("previews/")) return key.slice("previews/".length);
-  if (key.startsWith("uploads/")) return key.slice("uploads/".length);
+  // "uploads/" keys are originals — they are NOT served via the previews CDN.
+  // Stripping that prefix would build a broken CDN URL, so we pass through as-is.
   return key;
 }
 
@@ -66,226 +67,122 @@ function inferMediaType(item: any): "photo" | "video" {
   return "photo";
 }
 
-export async function GET(req: NextRequest) {
+export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  try {
-    const table = requireTable();
+  const table = requireTable();
 
-    const { searchParams } = new URL(req.url);
-    const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 50);
-    const cursor = searchParams.get("cursor");
-    const requestedEventId = normalizeEventId(searchParams.get("eventId"));
-    const mediaTypeParam = searchParams.get("mediaType");
-    const mediaTypeFilter =
-      mediaTypeParam === "photo" || mediaTypeParam === "video"
-        ? mediaTypeParam
-        : null;
+  const { searchParams } = new URL(req.url);
+  const limit = Math.min(Math.max(1, Number(searchParams.get("limit") ?? "20") || 20), 50);
+  const cursor = searchParams.get("cursor");
+  const requestedEventId = normalizeEventId(searchParams.get("eventId"));
+  const mediaTypeParam = searchParams.get("mediaType");
+  const mediaTypeFilter =
+    mediaTypeParam === "photo" || mediaTypeParam === "video"
+      ? mediaTypeParam
+      : null;
 
-    // Build a FilterExpression that mirrors inferMediaType():
-    //   video  → mediaType = "video"  OR  mimeType begins_with "video/"
-    //   photo  → NOT (mediaType = "video" OR mimeType begins_with "video/")
-    // This handles older records that only have mimeType stored.
-    const mediaFilterExpr =
-      mediaTypeFilter === "video"
-        ? {
-            FilterExpression:
-              "mediaType = :mtVideo OR begins_with(mimeType, :mimeVideo)",
-            ExtraValues: { ":mtVideo": "video", ":mimeVideo": "video/" },
-          }
-        : mediaTypeFilter === "photo"
-        ? {
-            FilterExpression:
-              "(attribute_not_exists(mediaType) OR mediaType <> :mtVideo)" +
-              " AND (attribute_not_exists(mimeType) OR NOT begins_with(mimeType, :mimeVideo))",
-            ExtraValues: { ":mtVideo": "video", ":mimeVideo": "video/" },
-          }
-        : null;
+  // Build a FilterExpression that mirrors inferMediaType():
+  //   video  → mediaType = "video"  OR  mimeType begins_with "video/"
+  //   photo  → NOT (mediaType = "video" OR mimeType begins_with "video/")
+  // This handles older records that only have mimeType stored.
+  const mediaFilterExpr =
+    mediaTypeFilter === "video"
+      ? {
+          FilterExpression:
+            "mediaType = :mtVideo OR begins_with(mimeType, :mimeVideo)",
+          ExtraValues: { ":mtVideo": "video", ":mimeVideo": "video/" },
+        }
+      : mediaTypeFilter === "photo"
+      ? {
+          FilterExpression:
+            "(attribute_not_exists(mediaType) OR mediaType <> :mtVideo)" +
+            " AND (attribute_not_exists(mimeType) OR NOT begins_with(mimeType, :mimeVideo))",
+          ExtraValues: { ":mtVideo": "video", ":mimeVideo": "video/" },
+        }
+      : null;
 
-    const ExclusiveStartKey = decodeCursor(cursor);
+  const ExclusiveStartKey = decodeCursor(cursor);
 
-    const groupIds = await getUserGroupIds(ddb, table, user.sub);
+  const groupIds = await getUserGroupIds(ddb, table, user.sub);
 
-    if (requestedEventId) {
-      const ownerRes = await ddb.send(
-        new GetCommand({
-          TableName: table,
-          Key: { PK: "EVENT", SK: `EVENT#${requestedEventId}` },
-          ProjectionExpression: "ownerUserId",
-        })
+  if (requestedEventId) {
+    const ownerRes = await ddb.send(
+      new GetCommand({
+        TableName: table,
+        Key: { PK: "EVENT", SK: `EVENT#${requestedEventId}` },
+        ProjectionExpression: "ownerUserId",
+      })
+    );
+
+    const ownerUserId = asNonEmptyString((ownerRes.Item as any)?.ownerUserId);
+    const isOwner = ownerUserId === user.sub;
+
+    const sharedSet = await getSharedEventIdsForUserGroups(
+      ddb,
+      table,
+      [requestedEventId],
+      groupIds
+    );
+    const isShared = sharedSet.has(requestedEventId);
+
+    if (!isOwner && !isShared) {
+      return NextResponse.json(
+        { photos: [], nextCursor: null },
+        { status: 403 }
       );
-
-      const ownerUserId = asNonEmptyString((ownerRes.Item as any)?.ownerUserId);
-      const isOwner = ownerUserId === user.sub;
-
-      const sharedSet = await getSharedEventIdsForUserGroups(
-        ddb,
-        table,
-        [requestedEventId],
-        groupIds
-      );
-      const isShared = sharedSet.has(requestedEventId);
-
-      if (!isOwner && !isShared) {
-        return NextResponse.json(
-          { photos: [], nextCursor: null },
-          { status: 403 }
-        );
-      }
-
-      const pk = `EVENT#${requestedEventId}`;
-
-      const result = await ddb.send(
-        new QueryCommand({
-          TableName: table,
-          KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
-          ...(mediaFilterExpr
-            ? {
-                FilterExpression: mediaFilterExpr.FilterExpression,
-                ExpressionAttributeValues: {
-                  ":pk": pk,
-                  ":skPrefix": "MEDIA#",
-                  ...mediaFilterExpr.ExtraValues,
-                },
-              }
-            : {
-                ExpressionAttributeValues: {
-                  ":pk": pk,
-                  ":skPrefix": "MEDIA#",
-                },
-              }),
-          Limit: limit,
-          ScanIndexForward: false,
-          ExclusiveStartKey,
-          ProjectionExpression:
-            "PK, SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
-        })
-      );
-
-      const items = (result.Items ?? []) as any[];
-      const lastEvaluated = result.LastEvaluatedKey ?? null;
-
-      const ownerIds = Array.from(
-        new Set(items.map((it) => asNonEmptyString(it?.ownerUserId)).filter(Boolean) as string[])
-      );
-      const nickByOwner = await getNicknamesForUsers(ddb, table, ownerIds);
-
-      const photos = await Promise.all(
-        items.map(async (item: any) => {
-          const url = await signGetUrl(item.s3Key);
-
-          const thumbnailUrl = item.thumbnailKey
-            ? previewUrlForKey(item.thumbnailKey)
-            : item.s3Key
-            ? previewUrlForKey(item.s3Key)
-            : undefined;
-
-          const ownerUserId = asNonEmptyString(item.ownerUserId);
-
-          return {
-            key: item.s3Key,
-            s3Key: item.s3Key,
-            thumbnailKey: item.thumbnailKey,
-            thumbnailUrl,
-            mimeType: item.mimeType,
-            mediaType: inferMediaType(item),
-            url,
-            eventId: item.eventId,
-            takenAt: item.takenAt,
-            ownerUserId,
-            ownerNickname: ownerUserId ? nickByOwner.get(ownerUserId) ?? null : null,
-            pk: item.PK,
-            sk: item.SK,
-          };
-        })
-      );
-
-      return NextResponse.json({
-        photos,
-        nextCursor: encodeCursor(lastEvaluated),
-      });
     }
 
-    const gsiRes = await withDdbRetry(() => ddb.send(
+    const pk = `EVENT#${requestedEventId}`;
+
+    const result = await ddb.send(
       new QueryCommand({
         TableName: table,
-        IndexName: "GSI1",
-        KeyConditionExpression: "GSI1PK = :pk",
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
         ...(mediaFilterExpr
           ? {
               FilterExpression: mediaFilterExpr.FilterExpression,
               ExpressionAttributeValues: {
-                ":pk": "PHOTO",
+                ":pk": pk,
+                ":skPrefix": "MEDIA#",
                 ...mediaFilterExpr.ExtraValues,
               },
             }
           : {
               ExpressionAttributeValues: {
-                ":pk": "PHOTO",
+                ":pk": pk,
+                ":skPrefix": "MEDIA#",
               },
             }),
         Limit: limit,
         ScanIndexForward: false,
         ExclusiveStartKey,
         ProjectionExpression:
-          "PK, SK, GSI1PK, GSI1SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
+          "PK, SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
       })
-    ));
-
-    const gsiItems = (gsiRes.Items ?? []) as any[];
-    const lastEvaluated = gsiRes.LastEvaluatedKey ?? null;
-
-    console.log("[api/photos] gsi page", {
-      requestedLimit: limit,
-      returnedItems: gsiItems.length,
-      hasLastEvaluatedKey: Boolean(lastEvaluated),
-    });
-
-    const owned = gsiItems.filter(
-      (it) => asNonEmptyString(it?.ownerUserId) === user.sub
     );
 
-    const notOwned = gsiItems.filter(
-      (it) => asNonEmptyString(it?.ownerUserId) !== user.sub
-    );
-
-    const candidateEventIds = Array.from(
-      new Set(
-        notOwned.map((it) => normalizeEventId(it?.eventId)).filter(Boolean)
-      )
-    ) as string[];
-
-    const sharedEvents = await getSharedEventIdsForUserGroups(
-      ddb,
-      table,
-      candidateEventIds,
-      groupIds
-    );
-
-    const allowedNotOwned = notOwned.filter((it) => {
-      const eid = normalizeEventId(it?.eventId);
-      if (!eid) return false;
-      return sharedEvents.has(eid);
-    });
-
-    const visible = [...owned, ...allowedNotOwned];
+    const items = (result.Items ?? []) as any[];
+    const lastEvaluated = result.LastEvaluatedKey ?? null;
 
     const ownerIds = Array.from(
-      new Set(visible.map((it) => asNonEmptyString(it?.ownerUserId)).filter(Boolean) as string[])
+      new Set(items.map((it) => asNonEmptyString(it?.ownerUserId)).filter(Boolean) as string[])
     );
     const nickByOwner = await getNicknamesForUsers(ddb, table, ownerIds);
 
     const photos = await Promise.all(
-      visible.map(async (item: any) => {
+      items.map(async (item: any) => {
         const url = await signGetUrl(item.s3Key);
 
+        // Only serve thumbnails via the CDN — never fall back to the raw s3Key,
+        // which lives under uploads/ and is not routed through the previews CDN.
+        // Videos without a poster frame will have no thumbnailUrl; the UI shows
+        // a placeholder instead.
         const thumbnailUrl = item.thumbnailKey
           ? previewUrlForKey(item.thumbnailKey)
-          : item.s3Key
-          ? previewUrlForKey(item.s3Key)
           : undefined;
 
         const ownerUserId = asNonEmptyString(item.ownerUserId);
@@ -312,155 +209,247 @@ export async function GET(req: NextRequest) {
       photos,
       nextCursor: encodeCursor(lastEvaluated),
     });
-  } catch (err) {
-    return handleRouteError("GET /api/photos", err);
   }
-}
 
-export async function DELETE(req: NextRequest) {
+  const gsiRes = await withDdbRetry(() => ddb.send(
+    new QueryCommand({
+      TableName: table,
+      IndexName: "GSI1",
+      KeyConditionExpression: "GSI1PK = :pk",
+      ...(mediaFilterExpr
+        ? {
+            FilterExpression: mediaFilterExpr.FilterExpression,
+            ExpressionAttributeValues: {
+              ":pk": "PHOTO",
+              ...mediaFilterExpr.ExtraValues,
+            },
+          }
+        : {
+            ExpressionAttributeValues: {
+              ":pk": "PHOTO",
+            },
+          }),
+      Limit: limit,
+      ScanIndexForward: false,
+      ExclusiveStartKey,
+      ProjectionExpression:
+        "PK, SK, GSI1PK, GSI1SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
+    })
+  ));
+
+  const gsiItems = (gsiRes.Items ?? []) as any[];
+  const lastEvaluated = gsiRes.LastEvaluatedKey ?? null;
+
+  const owned = gsiItems.filter(
+    (it) => asNonEmptyString(it?.ownerUserId) === user.sub
+  );
+
+  const notOwned = gsiItems.filter(
+    (it) => asNonEmptyString(it?.ownerUserId) !== user.sub
+  );
+
+  const candidateEventIds = Array.from(
+    new Set(
+      notOwned.map((it) => normalizeEventId(it?.eventId)).filter(Boolean)
+    )
+  ) as string[];
+
+  const sharedEvents = await getSharedEventIdsForUserGroups(
+    ddb,
+    table,
+    candidateEventIds,
+    groupIds
+  );
+
+  const allowedNotOwned = notOwned.filter((it) => {
+    const eid = normalizeEventId(it?.eventId);
+    if (!eid) return false;
+    return sharedEvents.has(eid);
+  });
+
+  const visible = [...owned, ...allowedNotOwned];
+
+  const ownerIds = Array.from(
+    new Set(visible.map((it) => asNonEmptyString(it?.ownerUserId)).filter(Boolean) as string[])
+  );
+  const nickByOwner = await getNicknamesForUsers(ddb, table, ownerIds);
+
+  const photos = await Promise.all(
+    visible.map(async (item: any) => {
+      const url = await signGetUrl(item.s3Key);
+
+      const thumbnailUrl = item.thumbnailKey
+        ? previewUrlForKey(item.thumbnailKey)
+        : item.s3Key
+        ? previewUrlForKey(item.s3Key)
+        : undefined;
+
+      const ownerUserId = asNonEmptyString(item.ownerUserId);
+
+      return {
+        key: item.s3Key,
+        s3Key: item.s3Key,
+        thumbnailKey: item.thumbnailKey,
+        thumbnailUrl,
+        mimeType: item.mimeType,
+        mediaType: inferMediaType(item),
+        url,
+        eventId: item.eventId,
+        takenAt: item.takenAt,
+        ownerUserId,
+        ownerNickname: ownerUserId ? nickByOwner.get(ownerUserId) ?? null : null,
+        pk: item.PK,
+        sk: item.SK,
+      };
+    })
+  );
+
+  return NextResponse.json({
+    photos,
+    nextCursor: encodeCursor(lastEvaluated),
+  });
+});
+
+export const DELETE = withErrorHandler("DELETE /api/photos", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  try {
-    const { searchParams } = new URL(req.url);
+  const { searchParams } = new URL(req.url);
 
-    let items: DeleteItem[] = [];
+  let items: DeleteItem[] = [];
 
-    const body = await req.json().catch(() => null);
-    const bodyItems = (body?.items ?? []) as DeleteItem[];
+  const body = await req.json().catch(() => null);
+  const bodyItems = (body?.items ?? []) as DeleteItem[];
 
-    if (Array.isArray(bodyItems) && bodyItems.length > 0) {
-      items = bodyItems;
-    } else {
-      const key = searchParams.get("key");
-      const pk = searchParams.get("pk");
-      const sk = searchParams.get("sk");
+  if (Array.isArray(bodyItems) && bodyItems.length > 0) {
+    items = bodyItems;
+  } else {
+    const key = searchParams.get("key");
+    const pk = searchParams.get("pk");
+    const sk = searchParams.get("sk");
 
-      if (pk && sk) {
-        items = [{ pk, sk, key: key ?? undefined }];
-      }
+    if (pk && sk) {
+      items = [{ pk, sk, key: key ?? undefined }];
     }
+  }
 
-    if (!Array.isArray(items) || items.length === 0) {
-      return NextResponse.json({ error: "No items provided" }, { status: 400 });
-    }
+  if (!Array.isArray(items) || items.length === 0) {
+    return NextResponse.json({ error: "No items provided" }, { status: 400 });
+  }
 
-    if (items.length > MAX_ITEMS) {
-      return NextResponse.json(
-        { error: `Too many items. Max ${MAX_ITEMS}` },
-        { status: 400 }
+  if (items.length > MAX_ITEMS) {
+    return NextResponse.json(
+      { error: `Too many items. Max ${MAX_ITEMS}` },
+      { status: 400 }
+    );
+  }
+
+  const table = requireTable();
+  const keys = items.map((i) => ({ PK: i.pk, SK: i.sk }));
+
+  const keyChunks = chunk(keys, 100);
+
+  const foundAll: any[] = [];
+  for (const kc of keyChunks) {
+    const got = await ddb.send(
+      new BatchGetCommand({
+        RequestItems: {
+          [table]: {
+            Keys: kc,
+            ProjectionExpression:
+              "PK, SK, ownerUserId, s3Key, thumbnailKey, eventId",
+          },
+        },
+      })
+    );
+
+    const found = got.Responses?.[table] ?? [];
+    foundAll.push(...found);
+  }
+
+  const deletable = foundAll.filter((x: any) => x.ownerUserId === user.sub);
+
+  if (deletable.length === 0) {
+    return NextResponse.json(
+      { error: "Nothing deletable for this user" },
+      { status: 403 }
+    );
+  }
+
+  const txChunks = chunk(deletable, 25);
+  for (const c of txChunks) {
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: c.map((d: any) => ({
+          Delete: {
+            TableName: table,
+            Key: { PK: d.PK, SK: d.SK },
+            ConditionExpression: "ownerUserId = :u",
+            ExpressionAttributeValues: { ":u": user.sub },
+          },
+        })),
+      })
+    );
+  }
+
+  const allKeys = deletable
+    .flatMap((d: any) => [d.s3Key, d.thumbnailKey])
+    .filter(Boolean) as string[];
+
+  const uniqueKeys = Array.from(new Set(allKeys));
+  const s3Objects = uniqueKeys.map((k) => ({ Key: k }));
+
+  if (s3Objects.length === 1) {
+    await s3.send(
+      new DeleteObjectCommand({
+        Bucket: process.env.S3_BUCKET_NAME!,
+        Key: s3Objects[0].Key!,
+      })
+    );
+  } else if (s3Objects.length > 1) {
+    const s3Chunks = chunk(s3Objects, 1000);
+    for (const sc of s3Chunks) {
+      await s3.send(
+        new DeleteObjectsCommand({
+          Bucket: process.env.S3_BUCKET_NAME!,
+          Delete: { Objects: sc, Quiet: true },
+        })
       );
     }
+  }
 
-    const table = requireTable();
-    const keys = items.map((i) => ({ PK: i.pk, SK: i.sk }));
+  const eventCounts = new Map<string, number>();
+  for (const d of deletable) {
+    const ev = typeof d?.eventId === "string" ? d.eventId.trim() : "";
+    if (!ev || ev.toLowerCase() === "default") continue;
+    eventCounts.set(ev, (eventCounts.get(ev) ?? 0) + 1);
+  }
 
-    const keyChunks = chunk(keys, 100);
+  if (eventCounts.size > 0) {
+    const now = new Date().toISOString();
 
-    const foundAll: any[] = [];
-    for (const kc of keyChunks) {
-      const got = await ddb.send(
-        new BatchGetCommand({
-          RequestItems: {
-            [table]: {
-              Keys: kc,
-              ProjectionExpression:
-                "PK, SK, ownerUserId, s3Key, thumbnailKey, eventId",
-            },
+    for (const [eventId, count] of eventCounts.entries()) {
+      const delta = -Math.abs(count);
+
+      await ddb.send(
+        new UpdateCommand({
+          TableName: table,
+          Key: { PK: "EVENT", SK: `EVENT#${eventId}` },
+          UpdateExpression: "ADD photoCount :d SET updatedAt = :now",
+          ExpressionAttributeValues: {
+            ":d": delta,
+            ":now": now,
           },
         })
       );
-
-      const found = got.Responses?.[table] ?? [];
-      foundAll.push(...found);
     }
-
-    const deletable = foundAll.filter((x: any) => x.ownerUserId === user.sub);
-
-    if (deletable.length === 0) {
-      return NextResponse.json(
-        { error: "Nothing deletable for this user" },
-        { status: 403 }
-      );
-    }
-
-    const txChunks = chunk(deletable, 25);
-    for (const c of txChunks) {
-      await ddb.send(
-        new TransactWriteCommand({
-          TransactItems: c.map((d: any) => ({
-            Delete: {
-              TableName: table,
-              Key: { PK: d.PK, SK: d.SK },
-              ConditionExpression: "ownerUserId = :u",
-              ExpressionAttributeValues: { ":u": user.sub },
-            },
-          })),
-        })
-      );
-    }
-
-    const allKeys = deletable
-      .flatMap((d: any) => [d.s3Key, d.thumbnailKey])
-      .filter(Boolean) as string[];
-
-    const uniqueKeys = Array.from(new Set(allKeys));
-    const s3Objects = uniqueKeys.map((k) => ({ Key: k }));
-
-    if (s3Objects.length === 1) {
-      await s3.send(
-        new DeleteObjectCommand({
-          Bucket: process.env.S3_BUCKET_NAME!,
-          Key: s3Objects[0].Key!,
-        })
-      );
-    } else if (s3Objects.length > 1) {
-      const s3Chunks = chunk(s3Objects, 1000);
-      for (const sc of s3Chunks) {
-        await s3.send(
-          new DeleteObjectsCommand({
-            Bucket: process.env.S3_BUCKET_NAME!,
-            Delete: { Objects: sc, Quiet: true },
-          })
-        );
-      }
-    }
-
-    const eventCounts = new Map<string, number>();
-    for (const d of deletable) {
-      const ev = typeof d?.eventId === "string" ? d.eventId.trim() : "";
-      if (!ev || ev.toLowerCase() === "default") continue;
-      eventCounts.set(ev, (eventCounts.get(ev) ?? 0) + 1);
-    }
-
-    if (eventCounts.size > 0) {
-      const now = new Date().toISOString();
-
-      for (const [eventId, count] of eventCounts.entries()) {
-        const delta = -Math.abs(count);
-
-        await ddb.send(
-          new UpdateCommand({
-            TableName: table,
-            Key: { PK: "EVENT", SK: `EVENT#${eventId}` },
-            UpdateExpression: "ADD photoCount :d SET updatedAt = :now",
-            ExpressionAttributeValues: {
-              ":d": delta,
-              ":now": now,
-            },
-          })
-        );
-      }
-    }
-
-    return NextResponse.json({
-      success: true,
-      deletedCount: deletable.length,
-      requestedCount: items.length,
-    });
-  } catch (err) {
-    return handleRouteError("DELETE /api/photos", err);
   }
-}
+
+  return NextResponse.json({
+    success: true,
+    deletedCount: deletable.length,
+    requestedCount: items.length,
+  });
+});

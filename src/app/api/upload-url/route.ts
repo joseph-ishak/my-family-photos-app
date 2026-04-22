@@ -54,7 +54,18 @@ export const POST = withErrorHandler("POST /api/upload-url", async (req: NextReq
 
   const mediaId = uuidv4();
   const uploadedAt = new Date().toISOString();
-  const timePart = takenAt ?? uploadedAt;
+
+  // Validate and normalize client-supplied takenAt to a valid ISO8601 string.
+  // An invalid value (e.g. "not-a-date") would produce a malformed SK and break
+  // chronological sort order in DynamoDB. Fall back to server time if invalid.
+  let timePart = uploadedAt;
+  if (takenAt && typeof takenAt === "string") {
+    const parsed = new Date(takenAt);
+    if (!Number.isNaN(parsed.getTime())) {
+      timePart = parsed.toISOString();
+    }
+  }
+
   const sk = `MEDIA#${timePart}#${mediaId}`;
 
   const bucket = requireBucket();

@@ -11,7 +11,7 @@ import {
 import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb } from "@/lib/db/client";
 import { asNonEmptyString, normalizeRole, chunk } from "@/lib/utils";
-import { requireTable, handleRouteError } from "@/lib/api";
+import { requireTable, withErrorHandler } from "@/lib/api";
 
 async function requireEventOwner(
   table: string,
@@ -48,7 +48,7 @@ async function requireEventOwner(
   return { ok: true as const, event: ev };
 }
 
-export async function GET(req: NextRequest, ctx: any) {
+export const GET = withErrorHandler("GET /api/events/[eventId]/share", async (req: NextRequest, ctx: any) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -70,95 +70,91 @@ export async function GET(req: NextRequest, ctx: any) {
     );
   }
 
-  try {
-    const sharesRes = await ddb.send(
-      new QueryCommand({
-        TableName: table,
-        KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
-        ExpressionAttributeValues: {
-          ":pk": `EVENT#${eventId}`,
-          ":skPrefix": "SHARE#GROUP#",
-        },
-        ProjectionExpression: "PK, SK, groupId, createdAt, createdBy",
-      })
-    );
+  const sharesRes = await ddb.send(
+    new QueryCommand({
+      TableName: table,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+      ExpressionAttributeValues: {
+        ":pk": `EVENT#${eventId}`,
+        ":skPrefix": "SHARE#GROUP#",
+      },
+      ProjectionExpression: "PK, SK, groupId, createdAt, createdBy",
+    })
+  );
 
-    const items = (sharesRes.Items ?? []) as any[];
+  const items = (sharesRes.Items ?? []) as any[];
 
-    const groupIds = Array.from(
-      new Set(
-        items
-          .map((it) => asNonEmptyString(it?.groupId))
-          .filter(Boolean) as string[]
-      )
-    );
+  const groupIds = Array.from(
+    new Set(
+      items
+        .map((it) => asNonEmptyString(it?.groupId))
+        .filter(Boolean) as string[]
+    )
+  );
 
-    const groupNameMap = new Map<string, string>();
+  const groupNameMap = new Map<string, string>();
 
-    if (groupIds.length > 0) {
-      const keys = groupIds.map((gid) => ({ PK: "GROUP", SK: `GROUP#${gid}` }));
-      const chunks = chunk(keys, 100);
+  if (groupIds.length > 0) {
+    const keys = groupIds.map((gid) => ({ PK: "GROUP", SK: `GROUP#${gid}` }));
+    const chunks = chunk(keys, 100);
 
-      for (const c of chunks) {
-        const input: BatchGetCommandInput = {
-          RequestItems: {
-            [table]: {
-              Keys: c,
-              ProjectionExpression: "groupId, #name, SK",
-              ExpressionAttributeNames: { "#name": "name" },
-            },
+    for (const c of chunks) {
+      const input: BatchGetCommandInput = {
+        RequestItems: {
+          [table]: {
+            Keys: c,
+            ProjectionExpression: "groupId, #name, SK",
+            ExpressionAttributeNames: { "#name": "name" },
           },
-        };
+        },
+      };
 
-        const got = await ddb.send(new BatchGetCommand(input));
-        const found = (got.Responses?.[table] ?? []) as any[];
+      const got = await ddb.send(new BatchGetCommand(input));
+      const found = (got.Responses?.[table] ?? []) as any[];
 
-        for (const g of found) {
-          const gid =
-            asNonEmptyString(g?.groupId) ??
-            (typeof g?.SK === "string" ? g.SK.replace(/^GROUP#/, "") : null);
+      for (const g of found) {
+        const gid =
+          asNonEmptyString(g?.groupId) ??
+          (typeof g?.SK === "string" ? g.SK.replace(/^GROUP#/, "") : null);
 
-          const name = asNonEmptyString(g?.name);
-          if (gid && name) groupNameMap.set(gid, name);
-        }
+        const name = asNonEmptyString(g?.name);
+        if (gid && name) groupNameMap.set(gid, name);
       }
     }
-
-    const shares = items
-      .map((it) => {
-        const gid =
-          asNonEmptyString(it?.groupId) ??
-          (typeof it?.SK === "string"
-            ? it.SK.replace(/^SHARE#GROUP#/, "")
-            : null);
-
-        if (!gid) return null;
-
-        return {
-          groupId: gid,
-          groupName: groupNameMap.get(gid) ?? undefined,
-          createdAt: typeof it?.createdAt === "string" ? it.createdAt : null,
-        };
-      })
-      .filter(Boolean) as {
-      groupId: string;
-      groupName?: string;
-      createdAt: string | null;
-    }[];
-
-    shares.sort((a, b) => {
-      const an = (a.groupName || a.groupId).toLowerCase();
-      const bn = (b.groupName || b.groupId).toLowerCase();
-      return an.localeCompare(bn);
-    });
-
-    return NextResponse.json({ shares });
-  } catch (err) {
-    return handleRouteError("GET /api/events/[eventId]/share", err);
   }
-}
 
-export async function POST(req: NextRequest, ctx: any) {
+  const shares = items
+    .map((it) => {
+      const gid =
+        asNonEmptyString(it?.groupId) ??
+        (typeof it?.SK === "string"
+          ? it.SK.replace(/^SHARE#GROUP#/, "")
+          : null);
+
+      if (!gid) return null;
+
+      return {
+        groupId: gid,
+        groupName: groupNameMap.get(gid) ?? undefined,
+        createdAt: typeof it?.createdAt === "string" ? it.createdAt : null,
+      };
+    })
+    .filter(Boolean) as {
+    groupId: string;
+    groupName?: string;
+    createdAt: string | null;
+  }[];
+
+  shares.sort((a, b) => {
+    const an = (a.groupName || a.groupId).toLowerCase();
+    const bn = (b.groupName || b.groupId).toLowerCase();
+    return an.localeCompare(bn);
+  });
+
+  return NextResponse.json({ shares });
+});
+
+export const POST = withErrorHandler("POST /api/events/[eventId]/share", async (req: NextRequest, ctx: any) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -179,95 +175,91 @@ export async function POST(req: NextRequest, ctx: any) {
     return NextResponse.json({ error: "groupId is required" }, { status: 400 });
   }
 
-  try {
-    const ownerCheck = await requireEventOwner(table, eventId, user.sub);
-    if (!ownerCheck.ok) {
-      return NextResponse.json(
-        { error: ownerCheck.error },
-        { status: ownerCheck.status }
-      );
-    }
-
-    const memberRes = await ddb.send(
-      new GetCommand({
-        TableName: table,
-        Key: { PK: `GROUP#${groupId}`, SK: `MEMBER#${user.sub}` },
-        ProjectionExpression: "userId, #role, createdAt",
-        ExpressionAttributeNames: { "#role": "role" },
-      })
-    );
-
-    const membership = memberRes.Item as any;
-    if (!membership) {
-      return NextResponse.json(
-        { error: "You are not a member of that group" },
-        { status: 403 }
-      );
-    }
-
-    const myRole = normalizeRole(membership?.role);
-    if (myRole !== "owner" && myRole !== "admin") {
-      return NextResponse.json(
-        { error: "Only group owners or admins can share events to this group" },
-        { status: 403 }
-      );
-    }
-
-    const now = new Date().toISOString();
-
-    const eventSharePk = `EVENT#${eventId}`;
-    const eventShareSk = `SHARE#GROUP#${groupId}`;
-
-    const groupSharePk = `GROUP#${groupId}`;
-    const groupShareSk = `SHARE#EVENT#${eventId}`;
-
-    await ddb.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Put: {
-              TableName: table,
-              Item: {
-                PK: eventSharePk,
-                SK: eventShareSk,
-                eventId,
-                groupId,
-                createdAt: now,
-                createdBy: user.sub,
-              },
-              ConditionExpression:
-                "attribute_not_exists(PK) AND attribute_not_exists(SK)",
-            },
-          },
-          {
-            Put: {
-              TableName: table,
-              Item: {
-                PK: groupSharePk,
-                SK: groupShareSk,
-                eventId,
-                groupId,
-                createdAt: now,
-                createdBy: user.sub,
-              },
-              ConditionExpression:
-                "attribute_not_exists(PK) AND attribute_not_exists(SK)",
-            },
-          },
-        ],
-      })
-    );
-
+  const ownerCheck = await requireEventOwner(table, eventId, user.sub);
+  if (!ownerCheck.ok) {
     return NextResponse.json(
-      { success: true, eventId, groupId, createdAt: now },
-      { status: 201 }
+      { error: ownerCheck.error },
+      { status: ownerCheck.status }
     );
-  } catch (err) {
-    return handleRouteError("POST /api/events/[eventId]/share", err);
   }
-}
 
-export async function DELETE(req: NextRequest, ctx: any) {
+  const memberRes = await ddb.send(
+    new GetCommand({
+      TableName: table,
+      Key: { PK: `GROUP#${groupId}`, SK: `MEMBER#${user.sub}` },
+      ProjectionExpression: "userId, #role, createdAt",
+      ExpressionAttributeNames: { "#role": "role" },
+    })
+  );
+
+  const membership = memberRes.Item as any;
+  if (!membership) {
+    return NextResponse.json(
+      { error: "You are not a member of that group" },
+      { status: 403 }
+    );
+  }
+
+  const myRole = normalizeRole(membership?.role);
+  if (myRole !== "owner" && myRole !== "admin") {
+    return NextResponse.json(
+      { error: "Only group owners or admins can share events to this group" },
+      { status: 403 }
+    );
+  }
+
+  const now = new Date().toISOString();
+
+  const eventSharePk = `EVENT#${eventId}`;
+  const eventShareSk = `SHARE#GROUP#${groupId}`;
+
+  const groupSharePk = `GROUP#${groupId}`;
+  const groupShareSk = `SHARE#EVENT#${eventId}`;
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: table,
+            Item: {
+              PK: eventSharePk,
+              SK: eventShareSk,
+              eventId,
+              groupId,
+              createdAt: now,
+              createdBy: user.sub,
+            },
+            ConditionExpression:
+              "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+          },
+        },
+        {
+          Put: {
+            TableName: table,
+            Item: {
+              PK: groupSharePk,
+              SK: groupShareSk,
+              eventId,
+              groupId,
+              createdAt: now,
+              createdBy: user.sub,
+            },
+            ConditionExpression:
+              "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+          },
+        },
+      ],
+    })
+  );
+
+  return NextResponse.json(
+    { success: true, eventId, groupId, createdAt: now },
+    { status: 201 }
+  );
+});
+
+export const DELETE = withErrorHandler("DELETE /api/events/[eventId]/share", async (req: NextRequest, ctx: any) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -288,42 +280,38 @@ export async function DELETE(req: NextRequest, ctx: any) {
 
   const table = requireTable();
 
-  try {
-    const ownerCheck = await requireEventOwner(table, eventId, user.sub);
-    if (!ownerCheck.ok) {
-      return NextResponse.json(
-        { error: ownerCheck.error },
-        { status: ownerCheck.status }
-      );
-    }
-
-    const eventSharePk = `EVENT#${eventId}`;
-    const eventShareSk = `SHARE#GROUP#${groupId}`;
-
-    const groupSharePk = `GROUP#${groupId}`;
-    const groupShareSk = `SHARE#EVENT#${eventId}`;
-
-    await ddb.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Delete: {
-              TableName: table,
-              Key: { PK: eventSharePk, SK: eventShareSk },
-            },
-          },
-          {
-            Delete: {
-              TableName: table,
-              Key: { PK: groupSharePk, SK: groupShareSk },
-            },
-          },
-        ],
-      })
+  const ownerCheck = await requireEventOwner(table, eventId, user.sub);
+  if (!ownerCheck.ok) {
+    return NextResponse.json(
+      { error: ownerCheck.error },
+      { status: ownerCheck.status }
     );
-
-    return NextResponse.json({ success: true, eventId, groupId });
-  } catch (err) {
-    return handleRouteError("DELETE /api/events/[eventId]/share", err);
   }
-}
+
+  const eventSharePk = `EVENT#${eventId}`;
+  const eventShareSk = `SHARE#GROUP#${groupId}`;
+
+  const groupSharePk = `GROUP#${groupId}`;
+  const groupShareSk = `SHARE#EVENT#${eventId}`;
+
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Delete: {
+            TableName: table,
+            Key: { PK: eventSharePk, SK: eventShareSk },
+          },
+        },
+        {
+          Delete: {
+            TableName: table,
+            Key: { PK: groupSharePk, SK: groupShareSk },
+          },
+        },
+      ],
+    })
+  );
+
+  return NextResponse.json({ success: true, eventId, groupId });
+});
