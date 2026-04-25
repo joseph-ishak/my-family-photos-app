@@ -50,6 +50,11 @@ const SENSITIVE_HEADERS = new Set([
   "X-Api-Key",
 ]);
 
+/**
+ * Replaces the value of any header whose name is in `SENSITIVE_HEADERS` with
+ * the literal string `"[Filtered]"`. Returns the original object unchanged if
+ * `headers` is undefined.
+ */
 function scrubHeaders(
   headers: Record<string, string> | undefined
 ): Record<string, string> | undefined {
@@ -61,6 +66,11 @@ function scrubHeaders(
   return out;
 }
 
+/**
+ * Replaces the value of any top-level key in a plain-object request body that
+ * is in `SENSITIVE_BODY_KEYS` with `"[Filtered]"`. Non-object and array values
+ * are returned as-is to avoid breaking non-JSON bodies.
+ */
 function scrubBody(raw: unknown): unknown {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   const out: Record<string, unknown> = {};
@@ -70,6 +80,11 @@ function scrubBody(raw: unknown): unknown {
   return out;
 }
 
+/**
+ * Replaces the value of any query parameter in `url` that is in
+ * `SENSITIVE_PARAMS` with `"[Filtered]"`. Returns the original string if the
+ * URL cannot be parsed (e.g. relative paths on the edge runtime).
+ */
 function scrubUrl(url: string | undefined): string | undefined {
   if (!url) return url;
   try {
@@ -85,6 +100,13 @@ function scrubUrl(url: string | undefined): string | undefined {
   }
 }
 
+/**
+ * Mutates a Sentry `ErrorEvent` in-place, scrubbing all PII fields before the
+ * event is transmitted to Sentry's ingest endpoint.
+ *
+ * Scrubs: request headers, cookies, URL query params, request body fields, and
+ * the user context (keeps `id` for deduplication, drops email/username).
+ */
 export function scrubEvent(event: ErrorEvent): ErrorEvent {
   // Scrub request
   if (event.request) {

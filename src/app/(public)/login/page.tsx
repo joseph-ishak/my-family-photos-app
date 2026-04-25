@@ -1,8 +1,24 @@
 "use client";
 
+/**
+ * Login page (`/login`) — handles all authentication flows in one form:
+ *
+ * - **`"login"`** — standard username + password sign-in. If Cognito returns
+ *   `NEW_PASSWORD_REQUIRED` (e.g. an admin-created account), a second password
+ *   field is revealed for the forced password change.
+ * - **`"forgotStart"`** — initiates a forgot-password flow by sending a
+ *   verification code via `POST /api/auth/forgot-password`.
+ * - **`"forgotConfirm"`** — completes the reset by submitting the code and new
+ *   password via `POST /api/auth/reset-password`.
+ *
+ * On successful login the page redirects to the `?next=` query param or `/home`.
+ * The first input receives focus automatically when the `mode` changes.
+ */
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+/** Eye icon for the password visibility toggle. `open` = password is visible. */
 const EyeIcon = ({ open }: { open: boolean }) =>
   open ? (
     <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none">
@@ -28,6 +44,7 @@ const EyeIcon = ({ open }: { open: boolean }) =>
     </svg>
   );
 
+/** Animated spinner shown inside the submit button while loading. */
 const Spinner = () => (
   <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
     <path
@@ -39,12 +56,18 @@ const Spinner = () => (
   </svg>
 );
 
+/** Discriminated union representing which authentication sub-form is active. */
 type Mode = "login" | "forgotStart" | "forgotConfirm";
 
+/**
+ * Safely parses a JSON response body.
+ * Returns `{}` on parse error so callers can use optional-chaining safely.
+ */
 async function readJsonSafe(res: Response) {
   return (await res.json().catch(() => ({}))) as any;
 }
 
+/** Multi-mode authentication form for login and password reset. */
 export default function LoginPage() {
   const router = useRouter();
 
@@ -108,6 +131,10 @@ export default function LoginPage() {
     resetPassword,
   ]);
 
+  /**
+   * Submits the login form. On success redirects to `?next` or `/home`.
+   * On `NEW_PASSWORD_REQUIRED` (409) reveals the new-password field.
+   */
   async function handleLogin() {
     if (!canSubmit) return;
 
@@ -148,6 +175,10 @@ export default function LoginPage() {
     }
   }
 
+  /**
+   * Sends the forgot-password request. On success transitions to
+   * `"forgotConfirm"` mode and shows an instruction message.
+   */
   async function handleForgotStart() {
     if (!canSubmit) return;
 
@@ -178,6 +209,10 @@ export default function LoginPage() {
     }
   }
 
+  /**
+   * Submits the password reset confirmation. On success returns to login mode
+   * with an "Password updated" info message.
+   */
   async function handleForgotConfirm() {
     setLoading(true);
     setError(null);
@@ -188,8 +223,6 @@ export default function LoginPage() {
       code: resetCode.trim(),
       newPassword: resetPassword,
     };
-
-    console.log("reset submit payload", payload);
 
     try {
       const res = await fetch("/api/auth/reset-password", {
@@ -215,6 +248,7 @@ export default function LoginPage() {
     }
   }
 
+  /** Form submit handler — delegates to the appropriate async handler based on `mode`. */
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
 

@@ -1,3 +1,13 @@
+/**
+ * POST /api/auth/forgot-password
+ *
+ * Triggers Cognito's `ForgotPassword` flow, which sends a verification code to
+ * the user's registered email address. The code is then used in
+ * `POST /api/auth/reset-password` to set a new password.
+ *
+ * Always returns 200 — even for unknown usernames — to prevent user enumeration.
+ * Cognito itself handles that response shape.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import {
   ForgotPasswordCommand,

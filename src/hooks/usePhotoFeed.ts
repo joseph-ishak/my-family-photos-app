@@ -1,25 +1,72 @@
 // src/hooks/usePhotoFeed.ts
+
+/**
+ * Core photo-feed hook powering the family-photos gallery.
+ *
+ * ## Pagination
+ * Photos are fetched from `GET /api/photos` using opaque encrypted cursors.
+ * A `generationRef` counter is incremented on every filter/event change; any
+ * in-flight fetch whose generation doesn't match the current one is silently
+ * discarded, preventing stale results from overwriting fresher state (the race
+ * condition fixed in March 2026).
+ *
+ * A `fetchedCursorsRef` set de-duplicates concurrent trigger sources (scroll
+ * events, explicit `loadMore` calls) so the same cursor is never fetched twice.
+ *
+ * ## Filtering
+ * - **`eventFilter`** — client-side filter applied to `photo.eventId`. The
+ *   value is also sent server-side when the event exists in `existingEvents`,
+ *   reducing the payload for scoped galleries.
+ * - **`dateFilter`** — client-side prefix match on `photo.takenAt`.
+ * - **`mediaFilter`** — sent server-side via `?mediaType=photo|video`.
+ *
+ * ## Delete flows
+ * - Single delete — removes by key from local state after API success.
+ * - Bulk delete — removes all selected keys after API success; clears selection.
+ *
+ * ## Photo editing (two-phase)
+ * `saveEditedPhoto` calls `POST /api/photos/request-edit` to get a presigned
+ * PUT URL, uploads the blob directly to S3, then calls
+ * `POST /api/photos/commit-edit` to update the DynamoDB record and receive a
+ * fresh CDN URL for the in-memory photo list.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteScroll } from "./useInfiniteScroll";
 import type { Photo } from "@/types/photo";
 
 export type { Photo };
 
+/** Shape of the `GET /api/photos` JSON response. */
 type ApiPhotosResponse = {
   photos: Photo[];
   nextCursor: string | null;
 };
 
+/** Arguments accepted by `usePhotosFeed`. */
 type Args = {
+  /** Number of photos to request per page. Defaults to 20. */
   pageSize?: number;
+  /**
+   * When provided, the feed starts pre-filtered to this event.
+   * Changing this prop resets the feed completely.
+   */
   initialEventFilter?: string;
 };
 
+/**
+ * Returns `true` if the photo represents a video.
+ * Checks `mediaType` first; falls back to `mimeType` prefix for compatibility.
+ */
 function isVideo(p: Photo) {
   if (p.mediaType) return p.mediaType === "video";
   return (p.mimeType ?? "").startsWith("video/");
 }
 
+/**
+ * Normalises an event ID for use in queries and comparisons.
+ * Trims whitespace and maps the string `"default"` to `""` (no filter).
+ */
 function safeEventId(v: string) {
   const s = (v ?? "").trim();
   if (!s) return "";
@@ -27,6 +74,15 @@ function safeEventId(v: string) {
   return s;
 }
 
+/**
+ * Primary photo-feed hook. Returns paginated, filtered photos and all the
+ * callbacks needed to operate the gallery UI.
+ *
+ * @param pageSize           - Items per page (default 20).
+ * @param initialEventFilter - Seed value for the event filter.
+ * @returns An object containing photos, filter state, pagination controls,
+ *          selection state, and CRUD callbacks.
+ */
 export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   const initialEvent = safeEventId(initialEventFilter ?? "");
 
@@ -57,6 +113,11 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   // Incremented on every reset to discard results from stale in-flight fetches
   const generationRef = useRef(0);
 
+  /**
+   * Fetches the current event list and per-event photo counts from
+   * `GET /api/events`. Merges both `summaries[].eventId` and the legacy
+   * `events[]` string array for backward compatibility.
+   */
   const refreshEvents = useCallback(async () => {
     try {
       const r = await fetch("/api/events", { credentials: "include" });
@@ -90,6 +151,20 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     }
   }, []);
 
+  /**
+   * Fetches a single page of photos from the API and appends the results to
+   * the local `photos` array (de-duplicating by `key`).
+   *
+   * Guards:
+   * - Returns immediately if `cursor === null` (no more pages).
+   * - Skips if another fetch is already in-flight (`inFlightRef`).
+   * - Skips if this cursor has already been fetched (`fetchedCursorsRef`).
+   * - Discards results from stale fetches via `generationRef`.
+   *
+   * @param cursor            - Opaque pagination cursor, or `undefined` for page 1.
+   * @param serverEventId     - Event ID to pass as `?eventId=` query param.
+   * @param serverMediaFilter - `"photo"` or `"video"`, or omitted for all.
+   */
   const fetchPage = useCallback(
     async (cursor?: string | null, serverEventId?: string, serverMediaFilter?: string) => {
       if (cursor === null) return;
@@ -198,6 +273,11 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   useEffect(() => { nextCursorRef.current = nextCursor; }, [nextCursor]);
   useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
 
+  /**
+   * Triggers the next page load when there is a cursor available and no fetch
+   * is already in-flight. Called by the infinite-scroll interval and explicitly
+   * by the UI.
+   */
   const loadMore = useCallback(() => {
     if (!hasMoreRef.current) return;
     const cursor = nextCursorRef.current;
@@ -230,6 +310,11 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
       });
   }, [photos, eventFilter, dateFilter]);
 
+  /**
+   * Maps an array of photo keys to the `{ pk, sk, key }` tuples required by
+   * the bulk-delete API. Silently drops any keys whose photo record is missing
+   * `pk` or `sk` (indicates data integrity issue).
+   */
   const buildDeleteItems = useCallback(
     (keys: string[]) => {
       return keys
@@ -245,6 +330,11 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     [photos]
   );
 
+  /**
+   * Sends the `DELETE /api/photos` request for the given items.
+   * Shows an alert and returns `false` on network or API error.
+   * Returns `true` on success.
+   */
   const runDelete = useCallback(
     async (items: { pk: string; sk: string; key: string }[]) => {
       let res: Response;
@@ -279,6 +369,10 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     []
   );
 
+  /**
+   * Deletes a single photo by key. Removes it from local state and clears it
+   * from the selection set on success.
+   */
   const deletePhoto = useCallback(
     async (key: string) => {
       const items = buildDeleteItems([key]);
@@ -297,6 +391,11 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     [buildDeleteItems, runDelete]
   );
 
+  /**
+   * Deletes all currently selected photos in a single API call.
+   * Clears the selection and removes the deleted photos from local state on
+   * success.
+   */
   const bulkDelete = useCallback(async () => {
     if (selectedKeys.length === 0) return;
 
@@ -315,6 +414,10 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     setSelectedKeys([]);
   }, [buildDeleteItems, runDelete, selectedKeys]);
 
+  /**
+   * Called by the upload modal after all files are committed. Resets the photo
+   * list and fetches fresh data so newly uploaded photos appear immediately.
+   */
   const handleUploadSuccess = useCallback(() => {
     setPhotos([]);
     setSelectedKeys([]);
@@ -325,6 +428,11 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     refreshEvents();
   }, [fetchPage, refreshEvents, serverEventId, serverMediaFilter]);
 
+  /**
+   * Updates the in-memory URL for a single photo after a successful edit.
+   * Also updates `expandedPhoto` if it is the same photo, so the lightbox
+   * immediately shows the edited version.
+   */
   const updatePhotoUrl = useCallback((key: string, url: string) => {
     setPhotos((prev) => prev.map((p) => (p.key === key ? { ...p, url } : p)));
     setExpandedPhoto((prev) =>
@@ -332,6 +440,16 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
     );
   }, []);
 
+  /**
+   * Two-phase photo edit save:
+   * 1. `POST /api/photos/request-edit` — gets a presigned S3 PUT URL.
+   * 2. S3 PUT — uploads the edited image blob directly.
+   * 3. `POST /api/photos/commit-edit` — updates the DynamoDB record and returns
+   *    a fresh CDN URL that is written back to the in-memory photo list.
+   *
+   * Videos are rejected with an alert (not yet supported).
+   * Missing `pk`/`sk`/`s3Key` fields are treated as a data error and abort.
+   */
   const saveEditedPhoto = useCallback(
     async (photo: Photo, blob: Blob) => {
       if (isVideo(photo)) {

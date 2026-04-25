@@ -1,11 +1,28 @@
 // src/app/(app)/settings/SettingsClientPage.tsx
 "use client";
 
+/**
+ * Client-side settings page — profile editing and avatar upload.
+ *
+ * Loads the current user's profile from `GET /api/profile` on mount and
+ * populates form fields with the existing values.
+ *
+ * On save:
+ * 1. Client-side validation (name, username regex, nickname presence).
+ * 2. If a new avatar file was picked, uploads it via a two-step presigned-URL
+ *    flow (`POST /api/profile/avatar-upload` → S3 PUT).
+ * 3. Saves the profile fields via `PUT /api/profile`.
+ * 4. Calls `refresh()` on `ProfileContext` so the `TopBar` avatar updates.
+ * 5. If the `?setup=1` query param is present, redirects to `?next=` (used
+ *    during initial profile completion flow).
+ */
+
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useProfile } from "../../components/ProfileProvider";
 import ContentFrame from "@/app/components/shell/ContentFrame";
 
+/** Local copy of the profile type mirroring the `/api/profile` response shape. */
 type Profile = {
   nickname: string;
   username?: string;
@@ -16,6 +33,7 @@ type Profile = {
   avatarUrl?: string | null;
 };
 
+/** Profile editing form with avatar upload. */
 export default function SettingsClientPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -82,6 +100,13 @@ export default function SettingsClientPage() {
     };
   }, []);
 
+  /**
+   * Uploads the selected avatar file if one was chosen, returning the resulting
+   * S3 key. Returns the existing `avatarKey` unchanged when no new file was
+   * selected. Uses a two-phase presigned-URL flow to upload directly to S3.
+   *
+   * @throws If the upload initialisation or S3 PUT fails.
+   */
   async function uploadAvatarIfNeeded(): Promise<string | null> {
     if (!avatarFile) return profile?.avatarKey ?? null;
 
@@ -115,6 +140,11 @@ export default function SettingsClientPage() {
     return s3Key as string;
   }
 
+  /**
+   * Validates the form, uploads the avatar (if changed), and saves the profile
+   * via `PUT /api/profile`. Refreshes the `ProfileContext` and redirects if in
+   * setup mode. Shows inline error/success banners for feedback.
+   */
   async function handleSave() {
     setSaving(true);
     setError(null);
@@ -173,6 +203,11 @@ export default function SettingsClientPage() {
     }
   }
 
+  /**
+   * Handles avatar file selection from the file input. Generates a local
+   * object URL for immediate preview. Resets the preview to the existing
+   * avatar URL when the file is cleared (file = `null`).
+   */
   function onPickAvatar(file: File | null) {
     setAvatarFile(file);
     setSuccess(null);

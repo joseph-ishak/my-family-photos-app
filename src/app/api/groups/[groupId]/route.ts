@@ -1,3 +1,10 @@
+/**
+ * Single-group endpoints.
+ *
+ * GET — fetch group metadata and member list (members only).
+ * PUT — rename the group; also updates the denormalized name in every member's
+ *       `USER#<sub> / GROUP#<id>` index record (owner only).
+ */
 // src/app/api/groups/[groupId]/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
@@ -11,6 +18,11 @@ import { ddb } from "@/lib/db/client";
 import { asNonEmptyString, normalizeRole } from "@/lib/utils";
 import { requireTable, withErrorHandler } from "@/lib/api";
 
+/**
+ * Returns the membership record for `userId` in `groupId`, or `undefined` if
+ * the user is not a member. Used to verify access before returning group details
+ * or performing mutations.
+ */
 async function getMyMembership(table: string, groupId: string, userId: string) {
   const res = await ddb.send(
     new GetCommand({

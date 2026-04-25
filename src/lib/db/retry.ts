@@ -1,9 +1,15 @@
+/** AWS SDK v3 error names that indicate a transient throttle — safe to retry. */
 const RETRYABLE = new Set([
   "ProvisionedThroughputExceededException",
   "ThrottlingException",
   "RequestLimitExceeded",
 ]);
 
+/**
+ * Returns true if the given error is a transient DynamoDB throttle that should
+ * be retried. Uses the stable `err.name` property from the AWS SDK v3 contract
+ * rather than string-matching `err.message`.
+ */
 function isRetryable(err: unknown): boolean {
   return (
     typeof err === "object" &&

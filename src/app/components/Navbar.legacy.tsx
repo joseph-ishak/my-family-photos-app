@@ -1,15 +1,27 @@
 "use client";
 
+/**
+ * Legacy top navigation bar — superseded by `TopBar` + `SideNav` + `BottomNav`.
+ *
+ * @deprecated Not rendered anywhere in the current app shell. Kept for
+ * reference only. Use the `(app)` layout components instead.
+ *
+ * Renders a blue sticky nav with desktop link buttons and a mobile hamburger
+ * menu. Calls `POST /api/auth/logout` then clears profile context on sign-out.
+ */
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useProfile, initials } from "./ProfileProvider";
 
+/** @deprecated Superseded by `TopBar`/`SideNav`/`BottomNav`. */
 export default function Navbar() {
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
 
   const { loading, profile, isAuthed, clear } = useProfile();
 
+  /** Signs the user out and redirects to `/login`. */
   const handleLogout = async () => {
     await fetch("/api/auth/logout", {
       method: "POST",

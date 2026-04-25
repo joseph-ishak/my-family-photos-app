@@ -1,3 +1,17 @@
+/**
+ * POST /api/photos/commit-edit
+ *
+ * Phase 2 of the photo edit flow: updates `editedAt` and `mimeType` on the
+ * DynamoDB media record after the client has successfully PUT the edited file
+ * to S3.
+ *
+ * Ownership is enforced atomically via a `ConditionExpression` that checks both
+ * `ownerUserId` and `s3Key` — this closes the TOCTOU window between the
+ * `request-edit` ownership check and this write.
+ *
+ * Also returns a fresh pre-signed `GetObject` URL so the UI can immediately
+ * display the edited photo without a separate reload.
+ */
 // src/app/api/photos/commit-edit/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";

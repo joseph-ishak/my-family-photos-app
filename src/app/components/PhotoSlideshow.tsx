@@ -1,5 +1,23 @@
 "use client";
 
+/**
+ * Full-screen photo and video slideshow with auto-play, multiple transitions,
+ * and fullscreen support.
+ *
+ * ## Features
+ * - Six transition effects: Fade, Slide, Zoom, Flip, Ken Burns, Random.
+ * - Three playback speeds: Slow (8 s), Normal (5 s), Fast (3 s).
+ * - Keyboard shortcuts: ← / →  navigate, Space  play/pause,
+ *   F  fullscreen, T  cycle transition, Escape  close.
+ * - Pre-loads images within a ±2 radius of the current index.
+ * - Auto-requests the next feed page when within 2 items of the end.
+ * - Videos play natively with browser controls; transitions are skipped.
+ *
+ * ## Behaviour
+ * The component is invisible (`index < 0`) until `openPhoto` is set by the
+ * parent. Body scroll is locked while the slideshow is open.
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Photo } from "../../types/photo";
 
@@ -11,6 +29,7 @@ type Props = {
   hasMore?: boolean;
 };
 
+/** Returns `true` if the photo item should be rendered as a `<video>` element. */
 function isVideo(photo: Photo) {
   if (photo.mediaType) return photo.mediaType === "video";
   return (photo.mimeType ?? "").startsWith("video/");
@@ -30,6 +49,10 @@ type Transition = "Fade" | "Slide" | "Zoom" | "Flip" | "Ken Burns" | "Random";
 const TRANSITION_OPTIONS: Transition[] = ["Fade", "Slide", "Zoom", "Flip", "Ken Burns", "Random"];
 const REAL_TRANSITIONS: Transition[]   = ["Fade", "Slide", "Zoom", "Flip", "Ken Burns"];
 
+/**
+ * Picks a random concrete transition, optionally excluding the last-used one
+ * to avoid repeating the same effect back-to-back.
+ */
 function pickRandom(exclude?: Transition): Transition {
   const pool = REAL_TRANSITIONS.filter((t) => t !== exclude);
   return pool[Math.floor(Math.random() * pool.length)];
@@ -70,6 +93,11 @@ const KEYFRAMES = `
 }
 `;
 
+/**
+ * Returns the inline `style` object (animation CSS) for the current media
+ * element based on the active transition, navigation direction, and slide index.
+ * The `idx` parity is used to alternate Ken Burns pan directions.
+ */
 function mediaStyle(t: Transition, dir: 1 | -1, idx: number): React.CSSProperties {
   const fast = "0.45s ease-out forwards";
   switch (t) {
@@ -98,6 +126,10 @@ function TransitionIcon() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Renders the full-screen slideshow overlay. Hidden (returns `null`) when
+ * `openPhoto` is `null` or no matching index can be found in `photos`.
+ */
 export default function PhotoSlideshow({ photos, openPhoto, onClose, loadMore, hasMore }: Props) {
   const [index, setIndex]         = useState(-1);
   const [direction, setDirection] = useState<1 | -1>(1);
@@ -221,11 +253,13 @@ export default function PhotoSlideshow({ photos, openPhoto, onClose, loadMore, h
     if (index < 0 && document.fullscreenElement) document.exitFullscreen();
   }, [index]);
 
+  /** Toggles the browser's native fullscreen mode on the slideshow container. */
   function toggleFullscreen() {
     if (!document.fullscreenElement) containerRef.current?.requestFullscreen();
     else document.exitFullscreen();
   }
 
+  /** Advances the selected transition to the next option in `TRANSITION_OPTIONS`. */
   function cycleTransition() {
     setTransition((cur) => {
       const i = TRANSITION_OPTIONS.indexOf(cur);

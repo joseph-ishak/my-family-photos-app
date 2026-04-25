@@ -8,10 +8,34 @@ import { getVerifiedUser } from "@/lib/auth-server";
 import { s3 } from "@/lib/db/client";
 import { requireBucket, withErrorHandler } from "@/lib/api";
 
+/**
+ * POST /api/upload-url
+ *
+ * Phase 1 of the two-phase upload flow: generates a pre-signed S3 PutObject
+ * URL and returns the metadata tokens the client needs for Phase 3.
+ *
+ * Flow:
+ *   1. POST /api/upload-url  → presigned S3 URL + metadata tokens
+ *   2. PUT  <signedUrl>      → client uploads file directly to S3
+ *   3. POST /api/media/commit → HeadObject verifies file, DynamoDB record written
+ *
+ * For `kind: "preview"` uploads (thumbnails), the response contains only
+ * `{ signedUrl, s3Key, mediaType, kind }` — no commit step is needed because
+ * preview keys are referenced by the original's commit request.
+ */
+
+/**
+ * Type guard that checks whether a value is a valid media type string.
+ * Defaults to `"photo"` in the caller when the value is not recognised.
+ */
 function isValidMediaType(value: unknown): value is "photo" | "video" {
   return value === "photo" || value === "video";
 }
 
+/**
+ * Type guard that checks whether a value is a valid upload kind.
+ * `"original"` = user-captured file; `"preview"` = server-generated thumbnail.
+ */
 function isValidKind(value: unknown): value is "original" | "preview" {
   return value === "original" || value === "preview";
 }

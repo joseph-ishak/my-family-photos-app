@@ -1,3 +1,17 @@
+/**
+ * GET /api/users
+ *
+ * Searches user profiles using GSI2 (indexed by `entityType` + `username`).
+ * When a `query` parameter is supplied, DynamoDB filters by `begins_with` on
+ * `username` and the results are further narrowed by an in-memory pass over
+ * `firstName`, `lastName`, and `nickname`.
+ *
+ * Query params:
+ *   query  — optional search string (prefix-matched against username at DB level)
+ *   limit  — max results to return (1–50, default 20)
+ *
+ * Response: { users: UserLite[] } sorted by lastName → firstName → username.
+ */
 // src/app/api/users/route.ts
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
@@ -9,10 +23,15 @@ import { ddb, s3 } from "@/lib/db/client";
 import { withErrorHandler } from "@/lib/api";
 import { withDdbRetry } from "@/lib/db/retry";
 
+/** Coerces an unknown value to a string, returning `""` for non-string types. */
 function safeStr(v: any) {
   return typeof v === "string" ? v : "";
 }
 
+/**
+ * Maps a raw DynamoDB profile item to the lightweight user shape returned by
+ * this endpoint. Extracts `userId` from the `USER#<sub>` PK pattern.
+ */
 function toUserLite(item: any) {
   const pk = safeStr(item?.PK);
   const userId = pk.startsWith("USER#") ? pk.slice("USER#".length) : pk;
@@ -27,6 +46,10 @@ function toUserLite(item: any) {
   };
 }
 
+/**
+ * Returns `true` if any of the user's searchable fields contain `q` as a
+ * substring (case-insensitive). Always returns `true` when `q` is empty.
+ */
 function matchesQuery(u: any, q: string) {
   if (!q) return true;
   const hay = [u.firstName, u.lastName, u.nickname, u.username, u.userId]

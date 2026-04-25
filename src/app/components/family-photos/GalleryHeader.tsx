@@ -1,9 +1,16 @@
 "use client";
 
+/**
+ * Page header for the gallery view. Displays the "Gallery" heading, a
+ * sub-title, and an "Upload" button that opens the upload modal.
+ */
+
 type Props = {
+  /** Called when the user clicks the Upload button. */
   onUploadClick: () => void;
 };
 
+/** Inline SVG plus icon for the upload button. */
 const PlusIcon = () => (
   <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none">
     <path
@@ -15,6 +22,9 @@ const PlusIcon = () => (
   </svg>
 );
 
+/**
+ * Renders the gallery page heading and the primary "Upload" action button.
+ */
 export default function GalleryHeader({ onUploadClick }: Props) {
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

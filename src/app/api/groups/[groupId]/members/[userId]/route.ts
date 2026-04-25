@@ -1,3 +1,13 @@
+/**
+ * DELETE /api/groups/[groupId]/members/[userId]
+ *
+ * Removes a member from a group. The caller must be an owner or admin. The
+ * group owner cannot be removed (returns 400).
+ *
+ * Deletes both DynamoDB membership items atomically:
+ *   GROUP#<groupId> / MEMBER#<userId>
+ *   USER#<userId>   / GROUP#<groupId>
+ */
 // src/app/api/groups/[groupId]/members/[userId]/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";

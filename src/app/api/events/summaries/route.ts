@@ -5,11 +5,26 @@ import type { NextRequest } from "next/server";
 import { ddb } from "@/lib/db/client";
 import { withErrorHandler } from "@/lib/api";
 
+/**
+ * GET /api/events/summaries
+ *
+ * Returns a list of all events with their most recent photo's cover URL and
+ * `updatedAt` timestamp, sorted newest-first. Used by the events grid on the
+ * home page.
+ *
+ * Note: unlike `GET /api/events` this endpoint does not enforce group-based
+ * access control — it is intended for internal use on authenticated pages only.
+ */
+
 const CF_BASE = (process.env.NEXT_PUBLIC_PREVIEWS_CDN_URL || "").replace(
   /\/$/,
   ""
 );
 
+/**
+ * Builds a full CDN URL for a given S3 key by prepending the CloudFront base
+ * URL. Returns `null` if either the base URL or the key is missing.
+ */
 function buildCdnUrl(key?: string | null) {
   if (!CF_BASE || !key) return null;
   return `${CF_BASE}/${encodeURI(key)}`;

@@ -1,3 +1,11 @@
+/**
+ * Groups collection endpoints.
+ *
+ * GET  — list all groups the authenticated user belongs to.
+ * POST — create a new group; the creator is automatically added as owner in a
+ *         single DynamoDB transaction that writes three items atomically:
+ *         the group record, the member record, and the user→group index record.
+ */
 // src/app/api/groups/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";

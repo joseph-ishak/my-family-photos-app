@@ -1,8 +1,20 @@
 "use client";
 
+/**
+ * Sticky top navigation bar rendered on every authenticated page.
+ *
+ * Shows the app logo/name (links to home), a centred page title derived from
+ * the current path, and a user avatar button (links to settings) with a
+ * Sign out button on wider screens.
+ */
+
 import { useRouter, usePathname } from "next/navigation";
 import { useProfile, initials } from "../ProfileProvider";
 
+/**
+ * Maps a URL pathname to a human-readable page title shown in the top bar.
+ * Returns "Family Photos" for any path that doesn't match a known route.
+ */
 function titleForPath(path: string) {
   if (path.startsWith("/family-photos")) return "Gallery";
   if (path.startsWith("/events")) return "Events";
@@ -12,12 +24,19 @@ function titleForPath(path: string) {
   return "Family Photos";
 }
 
+/**
+ * Renders the sticky application header with logo, page title, and user controls.
+ */
 export default function TopBar() {
   const router = useRouter();
   const pathname = usePathname();
 
   const { loading, profile, isAuthed, clear } = useProfile();
 
+  /**
+   * Signs the user out by calling the logout API, clearing the profile context,
+   * and redirecting to the login page.
+   */
   const handleLogout = async () => {
     await fetch("/api/auth/logout", {
       method: "POST",

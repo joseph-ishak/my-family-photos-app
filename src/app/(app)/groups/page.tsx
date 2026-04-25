@@ -1,9 +1,20 @@
 "use client";
 
+/**
+ * Groups list page (`/groups`).
+ *
+ * Lists all groups the authenticated user belongs to, with their role badge and
+ * creation date. Provides a **New group** button that expands an inline form
+ * for naming and creating a group via `POST /api/groups`.
+ *
+ * Each group card links to `/groups/[groupId]` for member management.
+ */
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import EmptyState, { EmptyStateIcon } from "@/app/components/ui/EmptyState";
 
+/** Minimal group summary returned by `GET /api/groups`. */
 type GroupSummary = {
   groupId: string;
   name: string;
@@ -11,10 +22,15 @@ type GroupSummary = {
   createdAt: string | null;
 };
 
+/** Shape of the `/api/groups` JSON response. */
 type ApiGroupsResponse = {
   groups?: GroupSummary[];
 };
 
+/**
+ * Formats an ISO date string to a locale-aware short date.
+ * Returns `null` for absent or unparseable values.
+ */
 function formatDate(value?: string | null) {
   if (!value) return null;
   const d = new Date(value);
@@ -22,16 +38,22 @@ function formatDate(value?: string | null) {
   return d.toLocaleDateString();
 }
 
+/** Maps a group role enum to its display label. */
 function roleLabel(role: GroupSummary["role"]) {
   if (role === "owner") return "Owner";
   if (role === "admin") return "Admin";
   return "Member";
 }
 
+/**
+ * Safely parses a JSON response body.
+ * Returns `{}` on parse error so callers can use optional-chaining safely.
+ */
 async function readJsonSafe(res: Response) {
   return (await res.json().catch(() => ({}))) as any;
 }
 
+/** Groups list page component. */
 export default function GroupsPage() {
   const [loading, setLoading] = useState(true);
   const [groups, setGroups] = useState<GroupSummary[]>([]);
@@ -40,6 +62,7 @@ export default function GroupsPage() {
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
 
+  /** Fetches the current user's groups and updates local state. */
   const refresh = async () => {
     setLoading(true);
     try {
@@ -69,6 +92,7 @@ export default function GroupsPage() {
     return true;
   }, [creating, newName]);
 
+  /** Submits the new-group form via `POST /api/groups` and refreshes the list. */
   const createGroup = async () => {
     const name = newName.trim();
     if (!name) return;

@@ -1,3 +1,15 @@
+/**
+ * Event sharing endpoints — manage which groups an event is shared with.
+ *
+ * GET    — list groups the event is currently shared with (owner only).
+ * POST   — share the event with a group (owner + group admin/owner only).
+ * DELETE — unshare the event from a group (owner only).
+ *
+ * Sharing is stored as a bi-directional pair of DynamoDB items written in a
+ * single transaction:
+ *   EVENT#<eventId>  / SHARE#GROUP#<groupId>   — for event → group lookup
+ *   GROUP#<groupId>  / SHARE#EVENT#<eventId>   — for group → event lookup
+ */
 // src/app/api/events/[eventId]/share/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
@@ -13,6 +25,11 @@ import { ddb } from "@/lib/db/client";
 import { asNonEmptyString, normalizeRole, chunk } from "@/lib/utils";
 import { requireTable, withErrorHandler } from "@/lib/api";
 
+/**
+ * Verifies that `userSub` is the owner of `eventId`. Returns an error
+ * descriptor on failure so the caller can return the appropriate HTTP response,
+ * or `{ ok: true, event }` on success.
+ */
 async function requireEventOwner(
   table: string,
   eventId: string,

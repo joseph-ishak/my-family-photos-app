@@ -1,3 +1,9 @@
+/**
+ * Unit tests for `src/lib/db/keys.ts`.
+ *
+ * Verifies that `Keys` produces the correct DynamoDB key strings, prefixes,
+ * and partition constants used throughout the application.
+ */
 import { describe, it, expect } from "vitest";
 import { Keys } from "@/lib/db/keys";
 

@@ -1,9 +1,29 @@
 "use client";
 
+/**
+ * Blocking overlay that prompts users to complete their profile before
+ * accessing the app.
+ *
+ * Rendered at the layout level so it appears on top of any page. It is shown
+ * only when the user is authenticated but `profile.profileComplete` is `false`,
+ * and only when the current route is not already `/settings` (to avoid covering
+ * the page the user needs to interact with).
+ *
+ * Provides two actions:
+ * - **Go to settings** — navigates to `/settings?setup=1` with a `?next=` param
+ *   that returns the user to their original destination after completing setup.
+ * - **Sign out** — calls `POST /api/auth/logout` then redirects to `/login`.
+ */
+
 import { useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useProfile } from "./ProfileProvider";
 
+/**
+ * Full-viewport blocking overlay shown when the user's profile is incomplete.
+ * Returns `null` when the profile is complete, the user is unauthenticated,
+ * or the current path already starts with `/settings`.
+ */
 export default function ProfileSetupModal() {
   const router = useRouter();
   const pathname = usePathname();

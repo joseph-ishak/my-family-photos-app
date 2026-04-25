@@ -12,11 +12,16 @@ type Props = {
   onUpdate: () => void;
 };
 
+/** Returns `true` if the photo item is a video based on `mediaType` or MIME type. */
 function isVideo(photo: Photo) {
   if ((photo as any).mediaType) return (photo as any).mediaType === "video";
   return (photo.mimeType ?? "").startsWith("video/");
 }
 
+/**
+ * Formats an ISO 8601 date string as a locale-aware date string.
+ * Returns `null` for absent or unparseable values.
+ */
 function formatDate(value?: string) {
   if (!value) return null;
   const d = new Date(value);
@@ -24,6 +29,10 @@ function formatDate(value?: string) {
   return d.toLocaleDateString();
 }
 
+/**
+ * Returns the owner's display nickname from the photo, trying several
+ * field names for backwards compatibility. Returns `null` if none are present.
+ */
 function getNickname(photo: Photo) {
   const raw =
     (photo as any).ownerNickname ||
@@ -34,6 +43,11 @@ function getNickname(photo: Photo) {
   return nick || null;
 }
 
+/**
+ * Derives a two-letter avatar monogram from a display name.
+ * Uses the first letter of the first word and the first letter of the last word.
+ * Falls back to just the first character when the name is a single word.
+ */
 function initialsFromName(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
 
@@ -44,6 +58,7 @@ function initialsFromName(name: string) {
   return out || name.slice(0, 1).toUpperCase();
 }
 
+/** Inline SVG trash icon used on the delete action button. */
 const TrashIcon = () => (
   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
     <path
@@ -56,6 +71,7 @@ const TrashIcon = () => (
   </svg>
 );
 
+/** Inline SVG pencil icon used on the edit action button. */
 const EditIcon = () => (
   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
     <path
@@ -73,12 +89,25 @@ const EditIcon = () => (
   </svg>
 );
 
+/** Inline SVG play icon overlaid on video thumbnails. */
 const PlayIcon = () => (
   <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none">
     <path d="M10 8.5v7l6-3.5-6-3.5Z" fill="currentColor" />
   </svg>
 );
 
+/**
+ * Single photo or video card displayed in the gallery grid.
+ *
+ * Shows a thumbnail (or video element with poster), an overlay with the event
+ * name, date, and owner avatar, and action buttons (delete, edit) that appear
+ * on hover or when the card is selected.
+ *
+ * - Videos render a `<video>` element with a play-icon overlay.
+ * - Edit is disabled for videos (video editing is not yet supported).
+ * - The selection checkbox is only shown when `canEdit` is true (i.e. the
+ *   viewer is the owner).
+ */
 export default function PhotoCard({
   photo,
   canEdit,

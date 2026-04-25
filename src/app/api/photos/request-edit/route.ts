@@ -1,3 +1,16 @@
+/**
+ * POST /api/photos/request-edit
+ *
+ * Phase 1 of the two-phase photo edit flow: verifies the caller owns the photo
+ * and returns a pre-signed S3 PutObject URL so the client can upload the edited
+ * version directly to S3.
+ *
+ * The client then calls `POST /api/photos/commit-edit` with the same `pk`,
+ * `sk`, `s3Key`, and `filetype` to persist the updated metadata in DynamoDB.
+ *
+ * Ownership is verified here via a GetItem check. The commit step additionally
+ * enforces ownership with a `ConditionExpression` to close the TOCTOU window.
+ */
 // src/app/api/photos/request-edit/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";

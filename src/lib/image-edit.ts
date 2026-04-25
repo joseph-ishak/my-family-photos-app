@@ -1,4 +1,23 @@
 // src/lib/image-edit.ts
+
+/**
+ * Renders the crop region of an image (after optional rotation) to a new Blob.
+ *
+ * The function works entirely in-browser using the Canvas 2D API:
+ *   1. Loads the source image from `imageSrc`.
+ *   2. Rotates it onto a temporary canvas (using the bounding-box dimensions so
+ *      nothing is clipped).
+ *   3. Copies only the `cropPixels` rectangle to an output canvas.
+ *   4. Encodes the output canvas as a Blob of the requested `mimeType`.
+ *
+ * @param params.imageSrc   - URL or data-URL of the source image.
+ * @param params.cropPixels - Crop region in image-space coordinates (post-rotation).
+ * @param params.rotation   - Clockwise rotation in degrees to apply before cropping.
+ * @param params.mimeType   - Output format; defaults to `"image/jpeg"`.
+ * @param params.quality    - JPEG quality 0–1; ignored for non-JPEG types. Defaults to 0.92.
+ *
+ * @throws {Error} If the browser does not support the Canvas API or `toBlob` fails.
+ */
 export async function getCroppedBlob(params: {
   imageSrc: string;
   cropPixels: { x: number; y: number; width: number; height: number };
@@ -66,6 +85,13 @@ export async function getCroppedBlob(params: {
   });
 }
 
+/**
+ * Loads an image from a URL and resolves once the browser has fully decoded it.
+ * `crossOrigin = "anonymous"` is set so Canvas operations on S3-hosted images
+ * do not throw security errors (requires the S3 bucket to send CORS headers).
+ *
+ * @throws {Error} If the image fails to load (network error, CORS, bad URL, etc.).
+ */
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();

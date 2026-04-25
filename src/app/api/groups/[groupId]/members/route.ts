@@ -1,3 +1,16 @@
+/**
+ * POST /api/groups/[groupId]/members
+ *
+ * Adds a user to a group. The caller must be an owner or admin of the group.
+ * The `owner` role cannot be assigned through this endpoint.
+ *
+ * Writes two DynamoDB items atomically:
+ *   GROUP#<groupId> / MEMBER#<userId>  — for group → member lookup
+ *   USER#<userId>   / GROUP#<groupId>  — for user → group lookup (index)
+ *
+ * Returns 409 if the user is already a member (`ConditionalCheckFailedException`
+ * caught by `withErrorHandler`).
+ */
 // src/app/api/groups/[groupId]/members/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";

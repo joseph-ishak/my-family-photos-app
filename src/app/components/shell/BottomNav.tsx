@@ -1,5 +1,12 @@
 "use client";
 
+/**
+ * Fixed bottom tab bar shown on mobile screens (hidden on `lg` and above).
+ * Contains the same five destinations as `SideNav`.
+ *
+ * Uses `aria-current="page"` on the active tab for screen-reader accessibility.
+ */
+
 import React from "react";
 import { usePathname, useRouter } from "next/navigation";
 
@@ -94,6 +101,7 @@ const items: Item[] = [
   { label: "Settings", href: "/settings", icon: SettingsIcon },
 ];
 
+/** Renders the fixed mobile bottom navigation tab bar. */
 export default function BottomNav() {
   const pathname = usePathname();
   const router = useRouter();

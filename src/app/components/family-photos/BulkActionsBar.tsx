@@ -53,6 +53,14 @@ const TrashIcon = () => (
   </svg>
 );
 
+/**
+ * Sticky action bar that appears at the top of the page whenever one or more
+ * photos are selected. Provides Select All / Clear / Delete controls.
+ *
+ * Delete triggers a confirmation modal before calling `onDeleteSelected` so the
+ * user cannot accidentally delete their photos. The bar is hidden (`display:
+ * none`) when no items are selected to avoid layout shifts.
+ */
 export default function BulkActionsBar({
   selectedCount,
   totalCount,
@@ -69,6 +77,10 @@ export default function BulkActionsBar({
 
   const showBar = totalCount > 0 && selectedCount > 0;
 
+  /**
+   * Called when the user confirms the delete action in the modal. Guards
+   * against double-submission with a local `deleting` flag.
+   */
   async function handleConfirmDelete() {
     if (deleting) return;
 

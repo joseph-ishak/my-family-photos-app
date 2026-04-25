@@ -1,5 +1,29 @@
 "use client";
 // src/app/%28app%29/family-photos/FamilyPhotosPage.tsx
+
+/**
+ * Core family photos gallery, shared between `/family-photos` and event detail
+ * pages.
+ *
+ * Exported as `FamilyPhotosPage`, which wraps the real implementation
+ * (`FamilyPhotosInner`) in a `<Suspense>` boundary — required because
+ * `FamilyPhotosInner` calls `useSearchParams()`.
+ *
+ * ## Props
+ * - `initialEventFilter` — when supplied (from an event detail page), the feed
+ *   starts pre-filtered to that event and the Upload modal locks to it.
+ * - `hideHeader` — suppresses the `GalleryHeader` (Upload button + title) when
+ *   the page is embedded inside an event detail banner.
+ *
+ * ## Features
+ * - Infinite-scroll pagination via `usePhotoFeed`.
+ * - Bulk selection and delete via `BulkActionsBar`.
+ * - Per-photo edit (crop/resize) via `PhotoEditorModal`.
+ * - Slideshow viewer via `PhotoSlideshow`.
+ * - Filters (event, date, media type) via `FiltersBar`.
+ * - `?upload=1` query-param auto-opens the upload modal (used from event pages).
+ */
+
 import { Suspense, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
@@ -17,11 +41,24 @@ import { usePhotosFeed } from "../../../hooks/usePhotoFeed";
 
 import type { Photo } from "../../../hooks/usePhotoFeed";
 
+/** Props accepted by `FamilyPhotosPage`. */
 type Props = {
+  /**
+   * When provided, the gallery is pre-filtered to this event and the upload
+   * modal is locked to it. Used from event detail pages.
+   */
   initialEventFilter?: string;
+  /**
+   * When `true`, suppresses the `GalleryHeader` component. Useful when
+   * embedding inside an event banner that provides its own upload button.
+   */
   hideHeader?: boolean;
 };
 
+/**
+ * Entry-point component. Wraps `FamilyPhotosInner` in a `<Suspense>` boundary
+ * to satisfy the Next.js requirement for components using `useSearchParams()`.
+ */
 export default function FamilyPhotosPage(props: Props) {
   return (
     <Suspense fallback={<FamilyPhotosSkeleton />}>
@@ -30,6 +67,7 @@ export default function FamilyPhotosPage(props: Props) {
   );
 }
 
+/** Suspense fallback shown while the client bundle is hydrating. */
 function FamilyPhotosSkeleton() {
   return (
     <div className="min-h-[60vh] grid place-items-center">
@@ -38,6 +76,12 @@ function FamilyPhotosSkeleton() {
   );
 }
 
+/**
+ * Inner gallery implementation. Consumes `usePhotoFeed` and composes all the
+ * gallery sub-components: upload modal, slideshow, editor modal, filters bar,
+ * bulk-actions bar, and the photo grid. Handles the `?upload=1` search param
+ * to auto-open the upload modal when navigated from an event detail page.
+ */
 function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
   const { loading, user } = useAuthUser();
 

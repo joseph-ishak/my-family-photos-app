@@ -31,6 +31,10 @@ type DeleteItem = {
 const MAX_ITEMS = 200;
 
 
+/**
+ * Returns a 1-hour pre-signed S3 GetObject URL for the given key, or
+ * `undefined` if `key` is absent (e.g. the item has no original yet).
+ */
 async function signGetUrl(key?: string) {
   if (!key) return undefined;
   return await getSignedUrl(
@@ -43,6 +47,12 @@ async function signGetUrl(key?: string) {
   );
 }
 
+/**
+ * Strips the `"previews/"` prefix from a key so it can be appended to the
+ * CloudFront CDN base URL. Keys under `"uploads/"` are originals that are NOT
+ * routed through the previews CDN — they are returned unchanged so a broken CDN
+ * URL is never constructed.
+ */
 function toPreviewPath(key: string) {
   if (key.startsWith("previews/")) return key.slice("previews/".length);
   // "uploads/" keys are originals — they are NOT served via the previews CDN.
@@ -50,6 +60,11 @@ function toPreviewPath(key: string) {
   return key;
 }
 
+/**
+ * Builds a full CloudFront CDN URL for a given S3 key.
+ *
+ * @throws {Error} If `PREVIEWS_CDN_URL` is not set in the environment.
+ */
 function previewUrlForKey(key: string) {
   const base = process.env.PREVIEWS_CDN_URL;
   if (!base) throw new Error("Missing PREVIEWS_CDN_URL");
@@ -57,6 +72,11 @@ function previewUrlForKey(key: string) {
   return new URL(rel, base.endsWith("/") ? base : base + "/").toString();
 }
 
+/**
+ * Determines the media type of a DynamoDB item. Prefers the explicit
+ * `mediaType` field, then falls back to inspecting `mimeType` for older records
+ * that pre-date the `mediaType` column.
+ */
 function inferMediaType(item: any): "photo" | "video" {
   const mt = asNonEmptyString(item?.mediaType);
   if (mt === "video") return "video";
@@ -67,6 +87,23 @@ function inferMediaType(item: any): "photo" | "video" {
   return "photo";
 }
 
+/**
+ * GET /api/photos
+ *
+ * Returns a paginated list of photos visible to the authenticated user.
+ *
+ * Query params:
+ *   eventId   — filter to a specific event (access-controlled)
+ *   mediaType — "photo" | "video" — filter by media type
+ *   limit     — page size 1–50 (default 20)
+ *   cursor    — opaque AES-256-GCM token from a previous response
+ *
+ * When `eventId` is given, access is checked (owner or shared group).
+ * Without `eventId`, the GSI1 global feed is used and filtered to items the
+ * user owns or can see via group sharing.
+ *
+ * Response: { photos: Photo[], nextCursor: string | null }
+ */
 export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {
@@ -310,6 +347,18 @@ export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) 
   });
 });
 
+/**
+ * DELETE /api/photos
+ *
+ * Deletes one or more photos. Accepts either a JSON body `{ items: DeleteItem[] }`
+ * (batch) or `?pk=&sk=&key=` query params (single item). Only items owned by
+ * the authenticated user are deleted; the rest are silently skipped.
+ *
+ * After removing DynamoDB records and S3 objects, the `photoCount` on each
+ * affected event is decremented via an `ADD photoCount -N` expression.
+ *
+ * Response: { success: true; deletedCount: number; requestedCount: number }
+ */
 export const DELETE = withErrorHandler("DELETE /api/photos", async (req: NextRequest) => {
   const user = await getVerifiedUser(req);
   if (!user?.sub) {

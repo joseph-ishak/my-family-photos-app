@@ -1,3 +1,13 @@
+/**
+ * POST /api/profile/avatar-upload
+ *
+ * Returns a pre-signed S3 PutObject URL the client can use to upload an avatar
+ * image directly to S3. The key is scoped to the authenticated user's sub to
+ * prevent one user from overwriting another's avatar.
+ *
+ * After uploading to the returned URL, the client should call
+ * `PUT /api/profile` with `{ avatarKey: s3Key }` to persist the reference.
+ */
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { PutObjectCommand } from "@aws-sdk/client-s3";

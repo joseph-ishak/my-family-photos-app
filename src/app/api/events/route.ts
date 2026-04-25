@@ -1,3 +1,13 @@
+/**
+ * GET /api/events
+ *
+ * Returns all events visible to the authenticated user — both events they own
+ * and events that have been shared with one of their groups.
+ *
+ * Response: { events: string[], summaries: EventSummary[] }
+ *   `events` is the ordered list of event IDs (alphabetical by name).
+ *   `summaries` contains the same list with full metadata for each event.
+ */
 // src/app/api/events/route.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
@@ -12,6 +22,7 @@ import { getUserGroupIds, getSharedEventIdsForUserGroups } from "@/lib/db/access
 import { requireTable, withErrorHandler } from "@/lib/api";
 import { withDdbRetry } from "@/lib/db/retry";
 
+/** Summary of a single event as returned by `GET /api/events`. */
 type EventSummary = {
   eventId: string;
   name: string;

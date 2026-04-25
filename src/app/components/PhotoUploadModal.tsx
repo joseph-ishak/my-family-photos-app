@@ -1,29 +1,78 @@
 "use client";
 
+/**
+ * Modal for uploading photos and videos to the family archive.
+ *
+ * ## Upload flow
+ * 1. **File selection** — the user picks one or more image/video files.
+ * 2. **HEIC conversion** — HEIC/HEIF images are converted to JPEG client-side
+ *    via `heic2any` before anything is sent to S3.
+ * 3. **Preview generation** — for photos a thumbnail JPEG is generated via
+ *    Canvas (max 480 px); for videos a poster frame is captured from early in
+ *    the clip (5 % of duration, capped at 0.2 s).
+ * 4. **Presigned-URL request** — calls `POST /api/upload-url` twice per file:
+ *    once for the preview (kind=`"preview"`) and once for the original
+ *    (kind=`"original"`). Both return presigned S3 PUT URLs.
+ * 5. **S3 PUT** — preview and original bytes are PUT directly to S3.
+ * 6. **DynamoDB commit** — only after the S3 PUT succeeds does the component
+ *    call `POST /api/media/commit` to write the metadata record, preventing
+ *    orphaned DB entries for incomplete uploads.
+ *
+ * Files are uploaded with concurrency-3 parallelism. Two progress bars track
+ * "preparing" (HEIC conversion + preview generation) and "uploading" (S3 PUTs)
+ * phases independently.
+ *
+ * `lockedEventId` pins uploads to a specific event and hides the event picker
+ * (used from event detail pages).
+ */
+
 import React, { useEffect, useMemo, useState } from "react";
 
+/** Props accepted by `PhotoUploadModal`. */
 type Props = {
+  /** Whether the modal is visible. */
   open: boolean;
+  /** Called when the modal should close (both cancel and after success). */
   onClose: () => void;
+  /** Called after all files have been committed to DynamoDB successfully. */
   onUploadSuccess: () => void;
+  /** Event IDs shown in the event dropdown. */
   existingEvents: string[];
+  /** Authenticated user object — must provide `sub` (Cognito user ID). */
   user: any;
+  /**
+   * When set, uploads are locked to this event ID and the event picker is
+   * hidden. Useful when uploading from an event detail page.
+   */
   lockedEventId?: string;
 };
 
+/** A single upload job that tracks the file and its position in the queue. */
 type Job = {
+  /** Index in the original file list — used for progress tracking. */
   index: number;
+  /** The (possibly pre-processed) file to upload. */
   file: File;
 };
 
+/** Returns `true` if the file's MIME type indicates a video. */
 function isVideoFile(file: File) {
   return file.type.startsWith("video/");
 }
 
+/** Returns `true` if the file's MIME type indicates an image. */
 function isImageFile(file: File) {
   return file.type.startsWith("image/");
 }
 
+/**
+ * Generates a JPEG thumbnail for a photo file by drawing it onto an off-screen
+ * canvas and encoding the result at 78 % quality. The longest dimension is
+ * clamped to 480 px while preserving aspect ratio.
+ *
+ * @param file - An image `File` (any browser-decodable format).
+ * @returns A JPEG `Blob` at most 480 × 480 px.
+ */
 async function imageFileToPreviewBlob(file: File): Promise<Blob> {
   const url = URL.createObjectURL(file);
 
@@ -68,6 +117,18 @@ async function imageFileToPreviewBlob(file: File): Promise<Blob> {
   }
 }
 
+/**
+ * Captures a poster frame from a video file and encodes it as a JPEG thumbnail.
+ *
+ * Seeks to 5 % of the video's duration (capped at 0.2 s) and draws that frame
+ * onto an off-screen canvas at 80 % JPEG quality. The longest dimension is
+ * clamped to 480 px. Waits for both `loadedmetadata` and `loadeddata` before
+ * seeking to maximise cross-browser compatibility (especially Safari).
+ *
+ * @param file - A video `File` in any browser-decodable format.
+ * @returns A JPEG `Blob` at most 480 × 480 px.
+ * @throws If the video cannot be decoded or the poster frame cannot be captured.
+ */
 async function videoFileToPosterBlob(file: File): Promise<Blob> {
   const url = URL.createObjectURL(file);
 
@@ -174,15 +235,25 @@ async function videoFileToPosterBlob(file: File): Promise<Blob> {
   }
 }
 
+/** Clamps a number to the range `[0, 100]` for use as a CSS percentage. */
 function clampPct(n: number) {
   return Math.max(0, Math.min(100, n));
 }
 
+/**
+ * Calculates the integer percentage of `done` out of `total`.
+ * Returns `0` when `total` is falsy to avoid division-by-zero.
+ */
 function pct(done: number, total: number) {
   if (!total) return 0;
   return clampPct(Math.round((done / total) * 100));
 }
 
+/**
+ * Returns `true` if the file appears to be a HEIC/HEIF image based on its
+ * MIME type or file extension. Browsers often report an empty MIME type for
+ * these files, so checking both is necessary.
+ */
 function isHeicOrHeif(file: File) {
   const type = (file.type || "").toLowerCase();
   const name = (file.name || "").toLowerCase();
@@ -195,15 +266,26 @@ function isHeicOrHeif(file: File) {
   );
 }
 
-// iPhone .mov files (and some other mobile video formats) can arrive with an
-// empty MIME type from the browser file picker. Check the extension as fallback.
+/**
+ * Video file extensions used as a fallback when the MIME type is absent.
+ * iPhone `.mov` files in particular often arrive with an empty type from the
+ * browser's file picker.
+ */
 const VIDEO_EXTENSIONS = [".mov", ".mp4", ".m4v", ".avi", ".mkv", ".webm"];
 
+/**
+ * Returns `true` if the file's extension matches a known video format.
+ * Used as a fallback when `file.type` is empty (common for iOS `.mov` files).
+ */
 function isVideoByExtension(file: File) {
   const name = (file.name || "").toLowerCase();
   return VIDEO_EXTENSIONS.some((ext) => name.endsWith(ext));
 }
 
+/**
+ * Replaces a `.heic` or `.heif` extension with `.jpg` in a filename.
+ * Used to produce a safe filename for the converted JPEG before upload.
+ */
 function replaceExtToJpg(name: string) {
   if (!name) return "image.jpg";
   if (/\.(heic|heif)$/i.test(name))
@@ -211,6 +293,13 @@ function replaceExtToJpg(name: string) {
   return name;
 }
 
+/**
+ * Upload modal component.
+ *
+ * Manages its own upload-phase state machine (`idle` → `preparing` →
+ * `uploading` → `finishing` → `idle`) and renders dual progress bars during
+ * the active upload. Resets all counters each time the modal opens.
+ */
 export default function PhotoUploadModal({
   open,
   onClose,
@@ -261,6 +350,11 @@ export default function PhotoUploadModal({
 
   if (!open) return null;
 
+  /**
+   * Converts a HEIC/HEIF file to JPEG using `heic2any` (lazily imported).
+   * Returns the original file unchanged if it is not HEIC/HEIF or if
+   * `heic2any` reports the file is already browser-readable.
+   */
   async function normalizeImage(file: File): Promise<File> {
     if (!isHeicOrHeif(file)) return file;
 
@@ -285,11 +379,24 @@ export default function PhotoUploadModal({
     }
   }
 
+  /**
+   * Pre-processes a file before upload. Currently only normalises HEIC/HEIF
+   * images; all other files (video, JPEG, PNG, etc.) pass through unchanged.
+   */
   async function preprocessFile(file: File): Promise<File> {
     if (isImageFile(file)) return normalizeImage(file);
     return file;
   }
 
+  /**
+   * Requests a presigned S3 PUT URL from `/api/upload-url`.
+   *
+   * For `kind === "original"`, the response also includes the `mediaId`, `sk`,
+   * `takenAt`, `filename`, and `eventId` fields needed for the commit step.
+   * These are guaranteed present for originals and absent for previews.
+   *
+   * @throws If the server returns a non-2xx status.
+   */
   async function requestSignedUrl(args: {
     filename: string;
     filetype: string;
@@ -321,6 +428,13 @@ export default function PhotoUploadModal({
     };
   }
 
+  /**
+   * Writes the DynamoDB metadata record for a successfully uploaded file by
+   * calling `POST /api/media/commit`. This is called only after the S3 PUT
+   * succeeds, implementing the two-phase upload commit pattern.
+   *
+   * @throws If the server returns a non-2xx status.
+   */
   async function commitUpload(args: {
     mediaId: string;
     sk: string;
@@ -342,6 +456,14 @@ export default function PhotoUploadModal({
     if (!res.ok) throw new Error(`commit failed: ${res.status}`);
   }
 
+  /**
+   * PUTs `body` directly to S3 via a presigned URL.
+   *
+   * @param signedUrl   - The presigned S3 PUT URL.
+   * @param contentType - MIME type to set as the `Content-Type` header.
+   * @param body        - Blob to upload.
+   * @throws If the S3 PUT returns a non-2xx status.
+   */
   async function putToS3(signedUrl: string, contentType: string, body: Blob) {
     const uploadRes = await fetch(signedUrl, {
       method: "PUT",
@@ -352,6 +474,17 @@ export default function PhotoUploadModal({
     if (!uploadRes.ok) throw new Error(`upload failed: ${uploadRes.status}`);
   }
 
+  /**
+   * Handles the complete upload lifecycle for a single file:
+   * 1. Generate preview/poster thumbnail.
+   * 2. Request presigned URLs for preview and original.
+   * 3. PUT preview bytes to S3.
+   * 4. PUT original bytes to S3.
+   * 5. Commit the DynamoDB record.
+   *
+   * Video poster generation failures are non-fatal — the upload continues
+   * without a thumbnail rather than aborting.
+   */
   async function uploadOneFile(
     file: File,
     eventIdValue: string,
@@ -436,6 +569,16 @@ export default function PhotoUploadModal({
     });
   }
 
+  /**
+   * Processes an array of jobs with bounded concurrency using a pull-from-queue
+   * pattern. Spawns `concurrency` long-running "runner" coroutines that each
+   * pull the next unstarted job and call `worker`. Stops all runners and
+   * re-throws the first error encountered.
+   *
+   * @param jobs        - Ordered list of upload jobs.
+   * @param concurrency - Maximum number of simultaneous uploads.
+   * @param worker      - Async function to execute for each job.
+   */
   async function runWithConcurrency(
     jobs: Job[],
     concurrency: number,
@@ -477,6 +620,10 @@ export default function PhotoUploadModal({
     !eventId ||
     (!locked && isCreatingNew && !newEvent.trim());
 
+  /**
+   * Handles file picker selection. Filters out unsupported file types and
+   * alerts the user if any files were skipped. Resets all progress counters.
+   */
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files || []);
     const supported = picked.filter(
@@ -494,6 +641,11 @@ export default function PhotoUploadModal({
     }
   };
 
+  /**
+   * Orchestrates the full upload sequence: HEIC normalization, concurrent S3
+   * uploads, and commit calls. Drives the `phase` state machine and progress
+   * counters. Calls `onUploadSuccess` and `onClose` after all files are done.
+   */
   const handleUpload = async () => {
     if (!files.length || !user || !eventId) return;
 

@@ -1,7 +1,17 @@
 "use client";
 
+/**
+ * React context that holds the authenticated user's profile and exposes helpers
+ * to refresh or clear it. Wraps the entire authenticated layout so any component
+ * in the tree can access profile data without prop-drilling.
+ *
+ * On mount, `ProfileProvider` calls `/api/auth/me` to confirm the session is
+ * still valid, then fetches `/api/profile` to hydrate the profile object.
+ */
+
 import React, { createContext, useContext, useEffect, useState } from "react";
 
+/** The subset of profile fields exposed through the context. */
 type Profile = {
   nickname: string;
   username?: string;
@@ -21,12 +31,23 @@ type ProfileContextValue = {
 
 const ProfileContext = createContext<ProfileContextValue | null>(null);
 
+/**
+ * Returns the nearest `ProfileContext` value. Must be called from a component
+ * that is a descendant of `ProfileProvider`; throws otherwise.
+ */
 export function useProfile() {
   const ctx = useContext(ProfileContext);
   if (!ctx) throw new Error("useProfile must be used within ProfileProvider");
   return ctx;
 }
 
+/**
+ * Generates a two-letter uppercase monogram from a display name.
+ * Used for avatar placeholders when no profile image is set.
+ *
+ * @example initials("Jane Doe") → "JD"
+ * @example initials("Alice")    → "A"
+ */
 export function initials(name: string) {
   const parts = name.trim().split(" ").filter(Boolean);
   const first = parts[0]?.[0] ?? "U";
@@ -34,11 +55,20 @@ export function initials(name: string) {
   return (first + last).toUpperCase();
 }
 
+/**
+ * Provides `ProfileContext` to the component tree. Fetches the session and
+ * profile on mount. Exposes `refresh()` to re-fetch after a profile update
+ * and `clear()` to wipe state on logout.
+ */
 export function ProfileProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [isAuthed, setIsAuthed] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
 
+  /**
+   * Re-fetches the session from `/api/auth/me` and the profile from
+   * `/api/profile`, updating context state. Safe to call at any time.
+   */
   async function refresh() {
     setLoading(true);
 
@@ -79,6 +109,10 @@ export function ProfileProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  /**
+   * Resets all profile state to unauthenticated defaults. Called immediately
+   * after a successful logout so the UI reflects the signed-out state.
+   */
   function clear() {
     setIsAuthed(false);
     setProfile(null);

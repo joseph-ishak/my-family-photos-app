@@ -1,8 +1,18 @@
 "use client";
 
+/**
+ * Root route handler (`/`). Checks the current session and redirects
+ * immediately to `/home` for authenticated users or `/login` for guests.
+ *
+ * Renders only a loading spinner while the session check is in-flight.
+ * The cancelled flag prevents state updates if the component unmounts
+ * before the async check resolves.
+ */
+
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
+/** Client-only redirect component mounted at the app root. */
 export default function RootPage() {
   const router = useRouter();
 

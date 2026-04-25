@@ -1,3 +1,8 @@
+/**
+ * Unit tests for `src/lib/utils.ts`.
+ *
+ * Covers: `asNonEmptyString`, `chunk`, `normalizeEventId`, `normalizeRole`.
+ */
 import { describe, it, expect } from "vitest";
 import {
   asNonEmptyString,

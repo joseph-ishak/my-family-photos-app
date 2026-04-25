@@ -1,5 +1,16 @@
 "use client";
 
+/**
+ * Events list page (`/events`).
+ *
+ * Fetches event summaries from `GET /api/events` and renders them in an
+ * `EventsGrid`. An **Upload** button opens `PhotoUploadModal` so users can
+ * start a new event or add to an existing one directly from this page.
+ *
+ * Each event card has a **Share** overlay that opens `EventShareModal` for
+ * managing group access without leaving the events list.
+ */
+
 import { useEffect, useMemo, useState } from "react";
 
 import EventsGrid, {
@@ -10,16 +21,22 @@ import PhotoUploadModal from "@/app/components/PhotoUploadModal";
 import { useProfile } from "@/app/components/ProfileProvider";
 import EventShareModal from "@/app/components/events/EventShareModal";
 
+/** Shape of the `/api/events` JSON response. */
 type ApiEventsResponse = {
   events?: string[];
   summaries?: EventSummary[];
 };
 
+/**
+ * Extracts a user object from the `ProfileContext` value.
+ * Tries several candidate keys defensively in case the shape changes.
+ */
 function getUserFromProfileContext(ctx: unknown) {
   const c = ctx as any;
   return c?.user ?? c?.profile ?? c?.me ?? c?.currentUser ?? null;
 }
 
+/** Events list page component. */
 export default function EventsPage() {
   const profileCtx = useProfile() as unknown;
   const user = getUserFromProfileContext(profileCtx);
@@ -31,6 +48,7 @@ export default function EventsPage() {
   const [shareOpen, setShareOpen] = useState(false);
   const [shareEventId, setShareEventId] = useState("");
 
+  /** Fetches the latest event summaries and updates local state. */
   const refresh = async () => {
     setLoading(true);
     try {
@@ -58,6 +76,7 @@ export default function EventsPage() {
 
   const isEmpty = !loading && summaries.length === 0;
 
+  /** Opens the share modal for the given event. */
   const openShare = (eventId: string) => {
     setShareEventId(eventId);
     setShareOpen(true);

@@ -1,17 +1,30 @@
 // src/app/(app)/home/page.tsx
 "use client";
 
+/**
+ * Home / dashboard page shown immediately after login.
+ *
+ * Performs two checks on mount:
+ * 1. If the user is unauthenticated it redirects to `/login`.
+ * 2. If the profile is incomplete it redirects to `/settings?setup=1`.
+ *
+ * When both checks pass it fetches the four most recent uploaded photos from
+ * `GET /api/photos?limit=4` and displays them in a grid as a quick preview.
+ */
+
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useProfile } from "@/app/components/ProfileProvider";
 import ContentFrame from "@/app/components/shell/ContentFrame";
 
+/** Minimal photo shape needed for the recent-uploads preview grid. */
 type Photo = {
   key: string;
   url: string;
   thumbnailUrl?: string;
 };
 
+/** Dashboard page that greets the user and shows a recent-uploads preview. */
 export default function HomePage() {
   const router = useRouter();
   const { loading: profileLoading, isAuthed, profile } = useProfile();
@@ -34,6 +47,7 @@ export default function HomePage() {
 
     let cancelled = false;
 
+    /** Loads the four most recent photos for the preview grid. */
     async function fetchPhotos() {
       setLoading(true);
       try {

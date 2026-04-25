@@ -1,3 +1,17 @@
+/**
+ * POST /api/photos/bulk-delete
+ *
+ * Deletes up to 200 photos and their S3 objects in a single request.
+ * Only items owned by the authenticated user can be deleted — others are
+ * silently skipped.
+ *
+ * DynamoDB items are removed in chunks of 25 via TransactWrite (with a
+ * `ConditionExpression` to prevent concurrent-ownership races). S3 objects
+ * are removed in a single `DeleteObjects` call.
+ *
+ * Request body: { items: { pk: string; sk: string; key?: string }[] }
+ * Response:     { success: true; deletedCount: number }
+ */
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import {
@@ -10,9 +24,13 @@ import { ddb, s3 } from "@/lib/db/client";
 import { chunk } from "@/lib/utils";
 import { requireTable, requireBucket, withErrorHandler } from "@/lib/api";
 
+/** Identifies a single media item to delete. */
 type DeleteItem = {
+  /** DynamoDB partition key (e.g. `"EVENT#summer-2025"`). */
   pk: string;
+  /** DynamoDB sort key (e.g. `"MEDIA#2025-07-04T12:00:00.000Z#<uuid>"`). */
   sk: string;
+  /** Optional S3 object key — used to verify the correct object is removed. */
   key?: string;
 };
 

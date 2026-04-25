@@ -1,6 +1,18 @@
 // src/app/components/family-photos/PhotoEditorModal.tsx
 "use client";
 
+/**
+ * Full-screen modal for cropping and rotating a photo before saving.
+ *
+ * Uses `react-easy-crop` for the crop/zoom/rotate UI and `getCroppedBlob`
+ * from `lib/image-edit.ts` to render the cropped region to a Blob that is
+ * passed to `onSave`. The modal resets its state on every open so stale crop
+ * coordinates from a previous edit do not carry over.
+ *
+ * `canEdit` must be `true` for the Save button to be enabled — the parent
+ * should only pass `true` when the viewer is the owner of the photo.
+ */
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Cropper from "react-easy-crop";
 import { getCroppedBlob } from "../../../lib/image-edit";
@@ -47,6 +59,10 @@ export default function PhotoEditorModal({
 
   if (!open) return null;
 
+  /**
+   * Renders the current crop region to a JPEG Blob, then calls `onSave` and
+   * closes the modal on success. Guards against double-submit with `saving`.
+   */
   async function handleSave() {
     if (!cropPixels) return;
 

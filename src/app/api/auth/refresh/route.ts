@@ -1,3 +1,13 @@
+/**
+ * POST /api/auth/refresh
+ *
+ * Silently refreshes the `accessToken` and `idToken` cookies using the stored
+ * `refreshToken`. Cognito's `REFRESH_TOKEN_AUTH` flow does not issue a new
+ * refresh token, so only the access and id cookies are updated.
+ *
+ * Returns 401 if the refresh token is absent or has expired — the client
+ * should redirect to `/login` in that case.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { InitiateAuthCommand } from "@aws-sdk/client-cognito-identity-provider";
 import { cognito } from "@/lib/db/client";

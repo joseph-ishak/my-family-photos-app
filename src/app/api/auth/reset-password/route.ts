@@ -1,3 +1,18 @@
+/**
+ * POST /api/auth/reset-password
+ *
+ * Completes the forgot-password flow initiated by `POST /api/auth/forgot-password`.
+ * Calls Cognito's `ConfirmForgotPassword` with the verification code that was
+ * emailed to the user and the new password they have chosen.
+ *
+ * Request body:
+ *   { username: string; code: string; newPassword: string }
+ *
+ * Responses:
+ *   200 — password changed successfully.
+ *   400 — missing required fields.
+ *   4xx/5xx — propagated from Cognito (e.g. expired code, invalid password policy).
+ */
 import { NextRequest, NextResponse } from "next/server";
 import {
   ConfirmForgotPasswordCommand,

@@ -1,8 +1,25 @@
 "use client";
 
+/**
+ * Generic modal backdrop and portal wrapper.
+ *
+ * Renders children inside a `document.body` portal so z-index stacking is
+ * not affected by the component's position in the React tree. Adds:
+ *   - A semi-transparent black overlay that calls `onClose` on click.
+ *   - An Escape key listener that also calls `onClose`.
+ *   - `overflow: hidden` on `document.body` to prevent background scrolling.
+ *
+ * The portal is only created after the component mounts (`mounted` state) to
+ * avoid SSR hydration mismatches.
+ */
+
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
+/**
+ * Wraps `children` in a full-screen modal overlay rendered into
+ * `document.body`. Handles Escape key, backdrop click, and body scroll-lock.
+ */
 export default function ModalShell({
   open,
   onClose,

@@ -1,6 +1,15 @@
 // src/app/components/events/EventsGrid.tsx
 "use client";
 
+/**
+ * Responsive grid of event cards. Each card links to the event's photo gallery
+ * and displays the event's cover image, name, last-updated date, and photo count.
+ *
+ * An optional `onShare` callback adds a "Share" button overlay to each card so
+ * the events page can open the `EventShareModal` without the grid knowing about
+ * it.
+ */
+
 import Link from "next/link";
 
 export type EventSummary = {
@@ -17,6 +26,10 @@ const CF_BASE = (process.env.NEXT_PUBLIC_PREVIEWS_CDN_URL || "").replace(
   ""
 );
 
+/**
+ * Formats an ISO 8601 date string as a locale-aware short date.
+ * Returns `null` for absent or unparseable values.
+ */
 function formatDate(value?: string | null) {
   if (!value) return null;
   const d = new Date(value);

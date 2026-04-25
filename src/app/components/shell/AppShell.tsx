@@ -1,10 +1,25 @@
 "use client";
 
+/**
+ * Root authenticated layout shell.
+ *
+ * Renders the `TopBar`, a two-column grid (sidebar nav + main content) on
+ * large screens, and the `BottomNav` tab bar on mobile. The sidebar is hidden
+ * on small screens via `hidden lg:block`.
+ *
+ * All authenticated pages are wrapped in this component via
+ * `src/app/(app)/layout.tsx`.
+ */
+
 import type { ReactNode } from "react";
 import TopBar from "./TopBar";
 import SideNav from "./SideNav";
 import BottomNav from "./BottomNav";
 
+/**
+ * Provides the top bar, responsive side-nav, and bottom-nav shell around
+ * authenticated page content.
+ */
 export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-50">

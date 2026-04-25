@@ -1,23 +1,45 @@
 "use client";
 
+/**
+ * Generic empty-state panel used throughout the app when a list or feed has
+ * no items to display.
+ *
+ * Renders a centred card with an optional icon, a title, a description, and
+ * up to two action buttons (primary and secondary). All props except `title`
+ * are optional so callers can use only what they need.
+ */
+
 import type { ReactNode } from "react";
 
 type Props = {
+  /** Bold heading shown inside the card. */
   title: string;
+  /** Supporting text shown below the title. */
   description?: string;
+  /** Optional icon node rendered above the title. */
   icon?: ReactNode;
 
+  /** Label for the primary action button. */
   actionLabel?: string;
+  /** Called when the primary action button is clicked. */
   onAction?: () => void;
+  /** When `true`, the primary button is disabled. */
   actionDisabled?: boolean;
 
+  /** Label for an optional secondary action button. */
   secondaryActionLabel?: string;
+  /** Called when the secondary action button is clicked. */
   onSecondaryAction?: () => void;
+  /** When `true`, the secondary button is disabled. */
   secondaryDisabled?: boolean;
 
+  /** Extra Tailwind classes applied to the outer container. */
   className?: string;
 };
 
+/**
+ * Renders the empty-state card with optional icon, actions, and description.
+ */
 export default function EmptyState({
   title,
   description,
@@ -83,6 +105,10 @@ export default function EmptyState({
   );
 }
 
+/**
+ * Default camera/photo icon rendered inside the empty-state card when no
+ * custom icon is provided by the parent.
+ */
 export function EmptyStateIcon() {
   return (
     <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none">

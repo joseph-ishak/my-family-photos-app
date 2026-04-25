@@ -1,5 +1,20 @@
 "use client";
 
+/**
+ * Event detail page (`/events/[eventId]`).
+ *
+ * Shows a full-bleed cover image banner with the event name, photo count, and
+ * last-updated label. Below the banner, embeds `FamilyPhotosPage` with
+ * `initialEventFilter` pre-set so the gallery is scoped to this event only.
+ *
+ * Share and Upload actions are exposed in the banner. The share button opens
+ * `EventShareModal`; the upload button links to the same page with `?upload=1`
+ * which `FamilyPhotosPage` intercepts to open `PhotoUploadModal` automatically.
+ *
+ * Event metadata is sourced from `GET /api/events` (the full summaries list)
+ * rather than a dedicated endpoint — the matching summary is found client-side.
+ */
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -7,6 +22,7 @@ import FamilyPhotosPage from "@/app/(app)/family-photos/FamilyPhotosPage";
 import ContentFrame from "@/app/components/shell/ContentFrame";
 import EventShareModal from "@/app/components/events/EventShareModal";
 
+/** Shape of a single item in the `/api/events` summaries array. */
 type EventSummary = {
   eventId: string;
   name: string;
@@ -16,12 +32,20 @@ type EventSummary = {
   coverKey: string | null;
 };
 
+/**
+ * Strips the leading `previews/` or `uploads/` prefix from an S3 key so it
+ * can be appended to the CDN base URL.
+ */
 function toPreviewPath(key: string) {
   if (key.startsWith("previews/")) return key.slice("previews/".length);
   if (key.startsWith("uploads/")) return key.slice("uploads/".length);
   return key;
 }
 
+/**
+ * Builds an absolute CDN URL for a cover image key.
+ * Returns `null` if the key or CDN base is absent.
+ */
 function buildPreviewUrl(key: string | null) {
   if (!key) return null;
 
@@ -32,6 +56,10 @@ function buildPreviewUrl(key: string | null) {
   return new URL(rel, base.endsWith("/") ? base : base + "/").toString();
 }
 
+/**
+ * Formats an ISO date string into a short human-readable label
+ * (e.g. `"Apr 12, 2025"`). Returns `null` for absent or invalid dates.
+ */
 function formatUpdated(value: string | null) {
   if (!value) return null;
   const d = new Date(value);
@@ -44,6 +72,7 @@ function formatUpdated(value: string | null) {
   });
 }
 
+/** ← chevron icon used in the back-to-events breadcrumb link. */
 const ArrowLeft = () => (
   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
     <path
@@ -56,6 +85,7 @@ const ArrowLeft = () => (
   </svg>
 );
 
+/** Event detail page — banner + scoped photo gallery. */
 export default function EventDetailPage() {
   const params = useParams();
   const raw = typeof params?.eventId === "string" ? params.eventId : "";

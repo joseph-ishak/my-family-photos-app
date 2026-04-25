@@ -1,8 +1,23 @@
 // src/app/components/events/EventShareModal.tsx
 "use client";
 
+/**
+ * Modal dialog for managing event-to-group sharing.
+ *
+ * Displays two panels:
+ * - **Add group access** — lets the current user (who must be owner or admin of
+ *   the target group) share an event with any of their eligible groups.
+ * - **Shared with** — lists existing share records with a Revoke button on each.
+ *
+ * Data is loaded fresh each time the modal opens via parallel fetches to
+ * `/api/groups` (user's groups) and `/api/events/:eventId/share` (current shares).
+ * POST and DELETE calls trigger a full reload rather than optimistic updates to
+ * keep client state consistent with the server.
+ */
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+/** Summary of a group the current user belongs to, including their role. */
 type GroupSummary = {
   groupId: string;
   name: string;
@@ -10,20 +25,36 @@ type GroupSummary = {
   createdAt: string | null;
 };
 
+/** A single record indicating an event has been shared with a specific group. */
 type ShareRecord = {
   groupId: string;
   groupName?: string;
   createdAt?: string | null;
 };
 
+/**
+ * Safely parses a JSON response body. Returns an empty object on parse error
+ * so callers can use optional-chaining without a try/catch.
+ */
 async function readJsonSafe(res: Response) {
   return (await res.json().catch(() => ({}))) as any;
 }
 
+/**
+ * Returns `true` if the given role grants permission to share an event with
+ * the group. Only owners and admins may share; plain members cannot.
+ */
 function roleAllowsShare(role: GroupSummary["role"]) {
   return role === "owner" || role === "admin";
 }
 
+/**
+ * Modal for sharing an event with groups.
+ *
+ * @param open    - Whether the modal is visible.
+ * @param eventId - The event to share or whose shares to manage.
+ * @param onClose - Called when the user dismisses the modal.
+ */
 export default function EventShareModal(props: {
   open: boolean;
   eventId: string;
@@ -54,6 +85,10 @@ export default function EventShareModal(props: {
     return true;
   }, [working, selectedGroupId, sharedGroupIds]);
 
+  /**
+   * Fetches the user's groups and the event's existing share records in
+   * parallel, then updates local state. Resets the group selector on each call.
+   */
   const load = useCallback(async () => {
     if (!eventId) return;
 
@@ -100,6 +135,10 @@ export default function EventShareModal(props: {
     };
   }, [open, eventId, load]);
 
+  /**
+   * POSTs to `/api/events/:eventId/share` to grant the selected group access to
+   * this event, then reloads the share list on success.
+   */
   const shareToGroup = async () => {
     const groupId = selectedGroupId.trim();
     if (!groupId) return;
@@ -131,6 +170,10 @@ export default function EventShareModal(props: {
     }
   };
 
+  /**
+   * DELETEs the share record for `groupId`, removing that group's access to
+   * the event, then reloads the share list on success.
+   */
   const revokeShare = async (groupId: string) => {
     const gid = groupId.trim();
     if (!gid) return;

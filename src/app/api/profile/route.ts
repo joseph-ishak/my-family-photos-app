@@ -1,3 +1,12 @@
+/**
+ * User profile endpoints.
+ *
+ * GET — fetch the authenticated user's profile. Creates a skeleton profile on
+ *       first access so the record always exists after the first GET.
+ * PUT — update profile fields (nickname, username, firstName, lastName,
+ *       avatarKey). Validates username format and marks `profileComplete` once
+ *       all required fields are present.
+ */
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
@@ -11,10 +20,15 @@ import { getVerifiedUser } from "@/lib/auth-server";
 import { ddb, s3 } from "@/lib/db/client";
 import { withErrorHandler } from "@/lib/api";
 
+/** Returns the current UTC time as an ISO 8601 string. */
 function now() {
   return new Date().toISOString();
 }
 
+/**
+ * Returns `true` if the profile has all three required fields (username,
+ * firstName, lastName) filled with non-empty strings.
+ */
 function isProfileComplete(p: any) {
   return Boolean(
     typeof p?.username === "string" &&
@@ -26,6 +40,10 @@ function isProfileComplete(p: any) {
   );
 }
 
+/**
+ * Derives a display nickname from the Cognito token payload, falling back
+ * through `nickname` → `preferred_username` → email local-part → "User".
+ */
 function defaultNickname(user: any) {
   if (typeof user.nickname === "string" && user.nickname) return user.nickname;
   if (typeof user.preferred_username === "string" && user.preferred_username)

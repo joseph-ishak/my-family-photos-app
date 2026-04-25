@@ -13,6 +13,16 @@ type Props = {
   onUpdate: (photo: Photo) => void;
 };
 
+/**
+ * Responsive masonry-style grid of `PhotoCard` components.
+ *
+ * Renders 1 column on mobile up to 4 columns on large screens. Delegates all
+ * interaction (selection, open, delete, edit) to the parent via callbacks so
+ * this component stays purely presentational.
+ *
+ * `canEdit` is derived here by comparing `photo.ownerUserId` to `userSub` —
+ * actions are shown only for photos the viewer owns.
+ */
 export default function PhotoGrid({
   photos,
   userSub,

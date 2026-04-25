@@ -1,3 +1,14 @@
+/**
+ * POST /api/auth/logout
+ *
+ * Clears the `accessToken`, `idToken`, and `refreshToken` cookies by setting
+ * them to an empty value with `maxAge: 0`. The browser will immediately expire
+ * them on receipt.
+ *
+ * Note: this does NOT revoke the tokens in Cognito — they remain valid until
+ * their natural expiry. For full revocation, call `AdminUserGlobalSignOut` on
+ * the server (a future improvement tracked separately).
+ */
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { withErrorHandler } from "@/lib/api";

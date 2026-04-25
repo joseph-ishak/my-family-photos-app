@@ -18,6 +18,10 @@ import { ddb, s3 } from "@/lib/db/client";
 import { requireTable, requireBucket, apiError, apiOk, withErrorHandler } from "@/lib/api";
 import { normalizeEventId } from "@/lib/utils";
 
+/**
+ * Type guard for the `mediaType` field. Returns `false` for any value other
+ * than the two recognised strings so the caller can return a 400.
+ */
 function isValidMediaType(v: unknown): v is "photo" | "video" {
   return v === "photo" || v === "video";
 }

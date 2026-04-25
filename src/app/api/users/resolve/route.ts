@@ -1,3 +1,16 @@
+/**
+ * POST /api/users/resolve
+ *
+ * Batch-fetches user profiles by a list of user IDs (Cognito `sub` values).
+ * Used to enrich data with display names and avatars without hitting
+ * `GET /api/users` once per user.
+ *
+ * Request body: { userIds: string[] }
+ * Response:     { users: UserLite[] }  (same shape as GET /api/users)
+ *
+ * IDs are looked up via BatchGet in chunks of 100 to stay within DynamoDB's
+ * per-request limit. Avatar URLs are pre-signed before returning.
+ */
 // src/app/api/users/resolve/route.ts
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
@@ -9,6 +22,7 @@ import { ddb, s3 } from "@/lib/db/client";
 import { chunk } from "@/lib/utils";
 import { withErrorHandler } from "@/lib/api";
 
+/** Coerces an unknown value to a string, returning `""` for non-string types. */
 function safeStr(v: any) {
   return typeof v === "string" ? v : "";
 }

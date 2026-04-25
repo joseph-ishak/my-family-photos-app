@@ -1,14 +1,27 @@
 "use client";
 
+/**
+ * Vertical navigation sidebar shown on large screens (≥ `lg` breakpoint).
+ * Hidden on mobile — `BottomNav` is used instead.
+ *
+ * Highlights the active item by comparing the current pathname to each item's
+ * `href` using a prefix match so nested routes also activate the parent item.
+ */
+
 import { usePathname, useRouter } from "next/navigation";
 import React from "react";
 
+/** A single navigation destination. */
 type Item = {
   label: string;
   href: string;
   icon: (props: { className?: string }) => React.ReactNode;
 };
 
+/**
+ * Returns the Tailwind class string for a nav item button based on whether
+ * it is the currently active route.
+ */
 function cls(active: boolean) {
   return active
     ? "w-full flex items-center gap-3 rounded-xl bg-neutral-900 px-3 py-3 text-sm font-medium"
@@ -100,6 +113,7 @@ const items: Item[] = [
   { label: "Settings", href: "/settings", icon: SettingsIcon },
 ];
 
+/** Renders the sticky left sidebar navigation panel. */
 export default function SideNav() {
   const pathname = usePathname();
   const router = useRouter();

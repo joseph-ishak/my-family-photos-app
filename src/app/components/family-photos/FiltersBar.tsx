@@ -1,18 +1,42 @@
 "use client";
 
+/**
+ * Filter bar for the family photos gallery.
+ *
+ * Provides three filtering controls side-by-side:
+ * - **Event** — `<select>` populated from `existingEvents`.
+ * - **Date** — `<input type="date">` for filtering by upload date.
+ * - **Media type** — segmented button (All / Photos / Videos).
+ *
+ * A **Clear filters** button is enabled only when at least one filter is active.
+ * All state is owned by the parent (`usePhotoFeed`); this component is purely
+ * presentational and fires callbacks on every change.
+ */
+
+/** Discriminated union for the media-type segment control. */
 type MediaFilter = "all" | "photo" | "video";
 
+/** Props accepted by `FiltersBar`. */
 type Props = {
+  /** Sorted list of event IDs to populate the event dropdown. */
   existingEvents: string[];
+  /** Currently active event filter value, or `""` for no filter. */
   eventFilter: string;
+  /** Currently active date filter (ISO `YYYY-MM-DD`), or `""` for no filter. */
   dateFilter: string;
+  /** Currently active media type filter. */
   mediaFilter: MediaFilter;
+  /** Called when the event dropdown selection changes. */
   onEventChange: (value: string) => void;
+  /** Called when the date input value changes. */
   onDateChange: (value: string) => void;
+  /** Called when the media type segment selection changes. */
   onMediaChange: (value: MediaFilter) => void;
+  /** Called when the Clear filters button is clicked. */
   onClear: () => void;
 };
 
+/** ✕ icon used inside the Clear filters button. */
 const XIcon = () => (
   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
     <path
@@ -24,12 +48,17 @@ const XIcon = () => (
   </svg>
 );
 
+/** Options for the media-type segment control, in display order. */
 const MEDIA_OPTIONS: { label: string; value: MediaFilter }[] = [
   { label: "All",    value: "all"   },
   { label: "Photos", value: "photo" },
   { label: "Videos", value: "video" },
 ];
 
+/**
+ * Filter toolbar rendered above the photo grid.
+ * All three filters (event, date, media type) are controlled externally.
+ */
 export default function FiltersBar({
   existingEvents,
   eventFilter,

@@ -1,11 +1,32 @@
 "use client";
 
+/**
+ * Group detail page (`/groups/[groupId]`).
+ *
+ * Shows group metadata (name, created/updated dates, the current user's role)
+ * and a members list sorted by role then alphabetically by last name.
+ *
+ * Owners can:
+ * - **Rename** the group via `PUT /api/groups/:groupId`.
+ * - **Add members** by searching users with `GET /api/users?query=` and
+ *   selecting from the typeahead dropdown, then `POST /api/groups/:groupId/members`.
+ * - **Remove members** (except the owner) via `DELETE /api/groups/:groupId/members/:userId`,
+ *   confirmed through an inline `ConfirmModal`.
+ *
+ * Admins can add and remove non-owner members but cannot rename the group.
+ *
+ * User profile data (names, avatars) is resolved in bulk via
+ * `POST /api/users/resolve` after loading the member list.
+ */
+
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import EmptyState, { EmptyStateIcon } from "@/app/components/ui/EmptyState";
 
+/** Discriminated union for the three possible group membership roles. */
 type GroupRole = "owner" | "admin" | "member";
 
+/** Full group record returned by `GET /api/groups/:groupId`. */
 type GroupDetails = {
   groupId: string;
   name: string;
@@ -15,17 +36,21 @@ type GroupDetails = {
   ownerUserId: string | null;
 };
 
+/** A single group member record. */
 type GroupMember = {
   userId: string;
   role: GroupRole;
+  /** ISO timestamp when the member was added. */
   createdAt: string | null;
 };
 
+/** Shape of the `/api/groups/:groupId` JSON response. */
 type ApiGroupResponse = {
   group?: GroupDetails;
   members?: GroupMember[];
 };
 
+/** Minimal user profile fields used in the member list and typeahead. */
 type UserLite = {
   userId: string;
   firstName?: string;
@@ -35,10 +60,18 @@ type UserLite = {
   avatarUrl?: string | null;
 };
 
+/**
+ * Safely parses a JSON response body.
+ * Returns `{}` on parse error so callers can use optional-chaining safely.
+ */
 async function readJsonSafe(res: Response) {
   return (await res.json().catch(() => ({}))) as any;
 }
 
+/**
+ * Formats an ISO date string to a locale-aware short date.
+ * Returns `null` for absent or unparseable values.
+ */
 function formatDate(value?: string | null) {
   if (!value) return null;
   const d = new Date(value);
@@ -46,20 +79,27 @@ function formatDate(value?: string | null) {
   return d.toLocaleDateString();
 }
 
+/** Maps a group role enum to its human-readable display label. */
 function roleLabel(role: GroupRole) {
   if (role === "owner") return "Owner";
   if (role === "admin") return "Admin";
   return "Member";
 }
 
+/** Returns `true` if the role grants permission to add or remove members. */
 function canManageMembers(role: GroupRole) {
   return role === "owner" || role === "admin";
 }
 
+/** Returns `true` if the role grants permission to rename the group. */
 function canEditGroup(role: GroupRole) {
   return role === "owner";
 }
 
+/**
+ * Produces a displayable full name from a `UserLite` object.
+ * Falls back through: full name → nickname → username → truncated userId.
+ */
 function displayName(u?: UserLite | null) {
   const fn = (u?.firstName || "").trim();
   const ln = (u?.lastName || "").trim();
@@ -72,6 +112,10 @@ function displayName(u?: UserLite | null) {
   return (u?.userId || "User").slice(0, 12);
 }
 
+/**
+ * Returns a secondary display line combining `@username` and `"nickname"`,
+ * falling back to the userId when neither is set.
+ */
 function secondaryLine(u?: UserLite | null, fallbackUserId?: string) {
   const parts: string[] = [];
   const un = (u?.username || "").trim();
@@ -83,6 +127,10 @@ function secondaryLine(u?: UserLite | null, fallbackUserId?: string) {
   return fallbackUserId ? fallbackUserId : "";
 }
 
+/**
+ * Generates a two-letter uppercase monogram from a `UserLite` object for
+ * use as an avatar placeholder.
+ */
 function initialsFrom(u?: UserLite | null) {
   const name = displayName(u);
   const parts = name.split(" ").filter(Boolean);
@@ -91,6 +139,11 @@ function initialsFrom(u?: UserLite | null) {
   return (a + b).toUpperCase();
 }
 
+/**
+ * Generic confirmation dialog. Accepts a title, optional description, and
+ * custom confirm/cancel labels. Disables buttons while `loading` is `true`
+ * to prevent double-submission.
+ */
 function ConfirmModal(props: {
   open: boolean;
   title: string;
@@ -141,6 +194,7 @@ function ConfirmModal(props: {
   );
 }
 
+/** Group detail page — shows group info, member list, and management controls. */
 export default function GroupDetailsPage() {
   const params = useParams<{ groupId: string }>();
   const router = useRouter();
@@ -223,6 +277,11 @@ export default function GroupDetailsPage() {
     return true;
   }, [canManage, adding, addUserId, memberIds]);
 
+  /**
+   * Resolves an array of user IDs to `UserLite` objects by calling
+   * `POST /api/users/resolve`. Updates `userMap` with the results.
+   * Fails silently — missing user profiles degrade to initials-only avatars.
+   */
   const resolveMembers = async (ids: string[]) => {
     if (!ids.length) {
       setUserMap({});
@@ -251,6 +310,10 @@ export default function GroupDetailsPage() {
     }
   };
 
+  /**
+   * Fetches the group details and member list from the API, then resolves
+   * member user profiles. Sets `error` if the request fails or returns 4xx/5xx.
+   */
   const refresh = async () => {
     setLoading(true);
     setError(null);
@@ -334,6 +397,7 @@ export default function GroupDetailsPage() {
     };
   }, [userQuery, canManage, memberIds]);
 
+  /** Submits the rename form via `PUT /api/groups/:groupId` and refreshes. */
   const doRename = async () => {
     const name = newName.trim();
     if (!name) return;
@@ -364,6 +428,10 @@ export default function GroupDetailsPage() {
     }
   };
 
+  /**
+   * Submits the add-member form via `POST /api/groups/:groupId/members`.
+   * Clears the user search inputs and refreshes the member list on success.
+   */
   const doAddMember = async () => {
     const userId = addUserId.trim();
     if (!userId) return;
@@ -400,11 +468,16 @@ export default function GroupDetailsPage() {
     }
   };
 
+  /** Opens the confirmation dialog before removing a member. */
   const openRemoveConfirm = (userId: string) => {
     setPendingRemoveUserId(userId);
     setConfirmOpen(true);
   };
 
+  /**
+   * Removes the pending member via `DELETE /api/groups/:groupId/members/:userId`,
+   * then closes the confirmation dialog and refreshes the list.
+   */
   const doRemoveMember = async () => {
     const userId = pendingRemoveUserId;
     if (!userId) return;
