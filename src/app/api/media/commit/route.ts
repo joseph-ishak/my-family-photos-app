@@ -34,7 +34,7 @@ export const POST = withErrorHandler("POST /api/media/commit", async (req: NextR
 
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
 
-  const { mediaId, sk, s3Key, eventId, takenAt, mimeType, filename, mediaType, thumbnailKey } = body as {
+  const { mediaId, sk, s3Key, eventId, takenAt, mimeType, filename, mediaType, thumbnailKey, archiveKey } = body as {
     mediaId?: string;
     sk?: string;
     s3Key?: string;
@@ -44,6 +44,8 @@ export const POST = withErrorHandler("POST /api/media/commit", async (req: NextR
     filename?: string;
     mediaType?: unknown;
     thumbnailKey?: string;
+    /** S3 key for the preserved HEIC/HEIF original (optional — only for HEIC uploads). */
+    archiveKey?: string;
   };
 
   if (!mediaId || !sk || !s3Key || !eventId || !takenAt || !mimeType || !filename) {
@@ -115,6 +117,10 @@ export const POST = withErrorHandler("POST /api/media/commit", async (req: NextR
         s3Bucket: bucket,
         s3Key,
         thumbnailKey: thumbnailKey ?? undefined,
+        // archiveKey uses if_not_exists semantics at the expression level, but
+        // since this is a PutCommand (full item replacement), we simply omit the
+        // field when absent so existing archiveKeys aren't overwritten on re-commit.
+        ...(archiveKey ? { archiveKey } : {}),
         mimeType,
         filename,
       },

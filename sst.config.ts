@@ -39,7 +39,51 @@ export default $config({
 
     const table = sst.aws.Dynamo.get("ExistingPhotosTable", photosTableName);
 
-    const previewsRouter = new sst.aws.Router("PreviewsCdn");
+    // Allow cross-origin requests to S3 presigned URLs so canvas operations
+    // (react-easy-crop, image-edit.ts) can draw images with crossOrigin="anonymous"
+    // without throwing a security error.
+    new aws.s3.BucketCorsConfigurationV2("UploadsBucketCors", {
+      bucket: uploads.name,
+      corsRules: [
+        {
+          allowedHeaders: ["*"],
+          allowedMethods: ["GET", "HEAD"],
+          allowedOrigins: ["*"],
+          maxAgeSeconds: 86400,
+        },
+      ],
+    });
+
+    // CloudFront Response Headers Policy that injects Access-Control-Allow-Origin
+    // on every CDN response. Without this, browsers block CDN thumbnail images
+    // loaded with crossOrigin="anonymous" (ORB / OpaqueResponseBlocking).
+    const previewsCorsPolicy = new aws.cloudfront.ResponseHeadersPolicy(
+      "PreviewsCorsPolicy",
+      {
+        name: "family-photos-previews-cors",
+        corsConfig: {
+          accessControlAllowCredentials: false,
+          accessControlAllowHeaders: { items: ["*"] },
+          accessControlAllowMethods: { items: ["GET", "HEAD"] },
+          accessControlAllowOrigins: { items: ["*"] },
+          // Override any CORS headers the origin (S3) might send.
+          originOverride: true,
+        },
+      }
+    );
+
+    const previewsRouter = new sst.aws.Router("PreviewsCdn", {
+      transform: {
+        cdn: (args) => {
+          // Attach the CORS policy to the default cache behaviour so every
+          // response from the previews CDN carries Access-Control-Allow-Origin.
+          args.defaultCacheBehavior = {
+            ...(args.defaultCacheBehavior as any),
+            responseHeadersPolicyId: previewsCorsPolicy.id,
+          };
+        },
+      },
+    });
 
     previewsRouter.routeBucket("/", uploads, {
       rewrite: {

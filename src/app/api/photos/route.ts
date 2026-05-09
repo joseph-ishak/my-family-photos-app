@@ -198,7 +198,7 @@ export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) 
         ScanIndexForward: false,
         ExclusiveStartKey,
         ProjectionExpression:
-          "PK, SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
+          "PK, SK, s3Key, thumbnailKey, archiveKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
       })
     );
 
@@ -229,6 +229,7 @@ export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) 
           s3Key: item.s3Key,
           thumbnailKey: item.thumbnailKey,
           thumbnailUrl,
+          archiveKey: item.archiveKey,
           mimeType: item.mimeType,
           mediaType: inferMediaType(item),
           url,
@@ -270,7 +271,7 @@ export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) 
       ScanIndexForward: false,
       ExclusiveStartKey,
       ProjectionExpression:
-        "PK, SK, GSI1PK, GSI1SK, s3Key, thumbnailKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
+        "PK, SK, GSI1PK, GSI1SK, s3Key, thumbnailKey, archiveKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
     })
   ));
 
@@ -315,10 +316,10 @@ export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) 
     visible.map(async (item: any) => {
       const url = await signGetUrl(item.s3Key);
 
+      // Only serve thumbnails via the CDN — never fall back to the raw s3Key,
+      // which lives under uploads/ and is not routed through the previews CDN.
       const thumbnailUrl = item.thumbnailKey
         ? previewUrlForKey(item.thumbnailKey)
-        : item.s3Key
-        ? previewUrlForKey(item.s3Key)
         : undefined;
 
       const ownerUserId = asNonEmptyString(item.ownerUserId);
@@ -328,6 +329,7 @@ export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) 
         s3Key: item.s3Key,
         thumbnailKey: item.thumbnailKey,
         thumbnailUrl,
+        archiveKey: item.archiveKey,
         mimeType: item.mimeType,
         mediaType: inferMediaType(item),
         url,

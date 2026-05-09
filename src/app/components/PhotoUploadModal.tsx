@@ -6,17 +6,21 @@
  * ## Upload flow
  * 1. **File selection** — the user picks one or more image/video files.
  * 2. **HEIC conversion** — HEIC/HEIF images are converted to JPEG client-side
- *    via `heic2any` before anything is sent to S3.
+ *    via `heic2any` at 95 % quality before anything is sent to S3. The original
+ *    HEIC file reference is retained in memory for archival.
  * 3. **Preview generation** — for photos a thumbnail JPEG is generated via
- *    Canvas (max 480 px); for videos a poster frame is captured from early in
+ *    Canvas (max 1200 px); for videos a poster frame is captured from early in
  *    the clip (5 % of duration, capped at 0.2 s).
- * 4. **Presigned-URL request** — calls `POST /api/upload-url` twice per file:
- *    once for the preview (kind=`"preview"`) and once for the original
- *    (kind=`"original"`). Both return presigned S3 PUT URLs.
- * 5. **S3 PUT** — preview and original bytes are PUT directly to S3.
- * 6. **DynamoDB commit** — only after the S3 PUT succeeds does the component
+ * 4. **Presigned-URL request** — calls `POST /api/upload-url` for the preview
+ *    (kind=`"preview"`), the display JPEG (kind=`"original"`), and — for HEIC
+ *    files — the lossless HEIC archive (kind=`"archive"`).
+ * 5. **S3 PUT** — preview, original, and (for HEIC) archive bytes are PUT
+ *    directly to S3.
+ * 6. **DynamoDB commit** — only after the S3 PUTs succeed does the component
  *    call `POST /api/media/commit` to write the metadata record, preventing
  *    orphaned DB entries for incomplete uploads.
+ * 7. **Archive key** — for HEIC originals, the `archiveKey` is included in the
+ *    commit payload so it is stored alongside `s3Key` and `thumbnailKey`.
  *
  * Files are uploaded with concurrency-3 parallelism. Two progress bars track
  * "preparing" (HEIC conversion + preview generation) and "uploading" (S3 PUTs)
@@ -51,8 +55,14 @@ type Props = {
 type Job = {
   /** Index in the original file list — used for progress tracking. */
   index: number;
-  /** The (possibly pre-processed) file to upload. */
+  /** The (possibly pre-processed) file to upload (JPEG for HEIC originals). */
   file: File;
+  /**
+   * The raw original file before HEIC→JPEG conversion.
+   * Only present for HEIC/HEIF uploads; `undefined` for all other file types.
+   * Used to PUT the lossless HEIC to S3 alongside the display JPEG.
+   */
+  originalFile?: File;
 };
 
 /** Returns `true` if the file's MIME type indicates a video. */
@@ -68,10 +78,10 @@ function isImageFile(file: File) {
 /**
  * Generates a JPEG thumbnail for a photo file by drawing it onto an off-screen
  * canvas and encoding the result at 78 % quality. The longest dimension is
- * clamped to 480 px while preserving aspect ratio.
+ * clamped to 1200 px while preserving aspect ratio.
  *
  * @param file - An image `File` (any browser-decodable format).
- * @returns A JPEG `Blob` at most 480 × 480 px.
+ * @returns A JPEG `Blob` at most 1200 × 1200 px.
  */
 async function imageFileToPreviewBlob(file: File): Promise<Blob> {
   const url = URL.createObjectURL(file);
@@ -86,7 +96,7 @@ async function imageFileToPreviewBlob(file: File): Promise<Blob> {
       img.src = url;
     });
 
-    const maxSide = 480;
+    const maxSide = 1200;
     const w = img.naturalWidth || img.width;
     const h = img.naturalHeight || img.height;
 
@@ -122,11 +132,11 @@ async function imageFileToPreviewBlob(file: File): Promise<Blob> {
  *
  * Seeks to 5 % of the video's duration (capped at 0.2 s) and draws that frame
  * onto an off-screen canvas at 80 % JPEG quality. The longest dimension is
- * clamped to 480 px. Waits for both `loadedmetadata` and `loadeddata` before
+ * clamped to 1200 px. Waits for both `loadedmetadata` and `loadeddata` before
  * seeking to maximise cross-browser compatibility (especially Safari).
  *
  * @param file - A video `File` in any browser-decodable format.
- * @returns A JPEG `Blob` at most 480 × 480 px.
+ * @returns A JPEG `Blob` at most 1200 × 1200 px.
  * @throws If the video cannot be decoded or the poster frame cannot be captured.
  */
 async function videoFileToPosterBlob(file: File): Promise<Blob> {
@@ -207,7 +217,7 @@ async function videoFileToPosterBlob(file: File): Promise<Blob> {
     const vh = video.videoHeight || 0;
     if (!vw || !vh) throw new Error("Video dimensions missing");
 
-    const maxSide = 480;
+    const maxSide = 1200;
     const scale = Math.min(1, maxSide / Math.max(vw, vh));
     const outW = Math.max(1, Math.round(vw * scale));
     const outH = Math.max(1, Math.round(vh * scale));
@@ -322,6 +332,14 @@ export default function PhotoUploadModal({
     "idle" | "preparing" | "uploading" | "finishing"
   >("idle");
 
+  const [showDetails, setShowDetails] = useState(false);
+  const [activePreparingFiles, setActivePreparingFiles] = useState<
+    { name: string; startedAt: number }[]
+  >([]);
+  const [activeUploadingNames, setActiveUploadingNames] = useState<string[]>([]);
+  const [, setTick] = useState(0);
+  const [skippedFiles, setSkippedFiles] = useState<string[]>([]);
+
   const locked = (lockedEventId || "").trim();
   const effectiveSelectedEvent = locked || selectedEvent;
 
@@ -346,27 +364,77 @@ export default function PhotoUploadModal({
     setCompletedCount(0);
     setActiveCount(0);
     setPhase("idle");
+    setShowDetails(false);
+    setActivePreparingFiles([]);
+    setActiveUploadingNames([]);
+    setSkippedFiles([]);
   }, [open]);
+
+  useEffect(() => {
+    if (phase !== "preparing") return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [phase]);
 
   if (!open) return null;
 
   /**
-   * Converts a HEIC/HEIF file to JPEG using `heic2any` (lazily imported).
-   * Returns the original file unchanged if it is not HEIC/HEIF or if
-   * `heic2any` reports the file is already browser-readable.
+   * Converts a HEIC/HEIF file to JPEG.
+   *
+   * Strategy (fastest first):
+   * 1. Native browser decoding via createImageBitmap + canvas — available on
+   *    Chrome 111+ and all Safari versions. Uses the browser's native C++ codec,
+   *    so it's orders of magnitude faster than a JS decoder.
+   * 2. heic2any fallback — pure-JS decoder for Firefox and older Chrome. Slow
+   *    for large files but correct.
+   *
+   * Returns the original file unchanged if it is not HEIC/HEIF.
    */
   async function normalizeImage(file: File): Promise<File> {
     if (!isHeicOrHeif(file)) return file;
 
+    // Attempt native decode first.
+    try {
+      const bitmap = await createImageBitmap(file);
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      canvas.getContext("2d")!.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const blob = await new Promise<Blob>((resolve, reject) =>
+        canvas.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
+          "image/jpeg",
+          0.95
+        )
+      );
+      return new File([blob], replaceExtToJpg(file.name), {
+        type: "image/jpeg",
+        lastModified: Date.now(),
+      });
+    } catch {
+      // Browser doesn't support native HEIC decoding — fall through to heic2any.
+    }
+
+    // heic2any fallback (Firefox, older Chrome).
+    // Race against a 60-second timeout — heic2any has no built-in limit and
+    // can silently hang on large or malformed HEIC files.
     try {
       const mod = await import("heic2any");
       const heic2any = (mod as any).default || mod;
 
-      const convertedBlob = await heic2any({
-        blob: file,
-        toType: "image/jpeg",
-        quality: 0.9,
-      });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("heic2any conversion timed out")),
+          60_000
+        )
+      );
+
+      const convertedBlob = await Promise.race([
+        heic2any({ blob: file, toType: "image/jpeg", quality: 0.95 }),
+        timeoutPromise,
+      ]);
 
       return new File([convertedBlob as Blob], replaceExtToJpg(file.name), {
         type: "image/jpeg",
@@ -374,7 +442,18 @@ export default function PhotoUploadModal({
       });
     } catch (err: any) {
       const msg = String(err?.message || err || "");
-      if (msg.includes("already browser readable")) return file;
+      if (msg.includes("already browser readable")) {
+        // heic2any detected the file's actual bytes are already a browser-readable
+        // format (most commonly JPEG — macOS/iCloud delivers HEIC-named files that
+        // contain JPEG data). Wrap in a new File so:
+        //   1. S3 gets the correct Content-Type ("image/jpeg") instead of "image/heic"
+        //   2. processed !== original, which lets handleUpload set originalFile
+        //      so the raw source file is still preserved under originals/ in S3.
+        const detectedType = msg.match(/image\/\w+/)?.[0] ?? "image/jpeg";
+        const ext = detectedType === "image/jpeg" ? ".jpg" : ".png";
+        const safeName = file.name.replace(/\.(heic|heif)$/i, ext);
+        return new File([file], safeName, { type: detectedType, lastModified: file.lastModified });
+      }
       throw err;
     }
   }
@@ -384,7 +463,9 @@ export default function PhotoUploadModal({
    * images; all other files (video, JPEG, PNG, etc.) pass through unchanged.
    */
   async function preprocessFile(file: File): Promise<File> {
-    if (isImageFile(file)) return normalizeImage(file);
+    // isImageFile checks file.type, which is empty ("") for HEIC on Firefox and
+    // Chrome — always fall through to normalizeImage for HEIC/HEIF regardless.
+    if (isImageFile(file) || isHeicOrHeif(file)) return normalizeImage(file);
     return file;
   }
 
@@ -393,7 +474,10 @@ export default function PhotoUploadModal({
    *
    * For `kind === "original"`, the response also includes the `mediaId`, `sk`,
    * `takenAt`, `filename`, and `eventId` fields needed for the commit step.
-   * These are guaranteed present for originals and absent for previews.
+   * These are guaranteed present for originals and absent for previews/archives.
+   *
+   * Pass `mediaId` when requesting an archive URL so both S3 keys share the
+   * same UUID as the display JPEG.
    *
    * @throws If the server returns a non-2xx status.
    */
@@ -403,8 +487,10 @@ export default function PhotoUploadModal({
     userId: string;
     eventId: string;
     mediaType: "photo" | "video";
-    kind: "preview" | "original";
+    kind: "preview" | "original" | "archive";
     thumbnailKey?: string;
+    /** Pass the mediaId from the original response when kind === "archive". */
+    mediaId?: string;
   }) {
     const res = await fetch("/api/upload-url", {
       method: "POST",
@@ -418,7 +504,7 @@ export default function PhotoUploadModal({
       signedUrl: string;
       s3Key: string;
       mediaType: "photo" | "video";
-      kind: "preview" | "original";
+      kind: "preview" | "original" | "archive";
       // Returned for kind === "original" only — used in the commit step.
       mediaId?: string;
       sk?: string;
@@ -430,8 +516,10 @@ export default function PhotoUploadModal({
 
   /**
    * Writes the DynamoDB metadata record for a successfully uploaded file by
-   * calling `POST /api/media/commit`. This is called only after the S3 PUT
-   * succeeds, implementing the two-phase upload commit pattern.
+   * calling `POST /api/media/commit`. This is called only after all S3 PUTs
+   * succeed, implementing the two-phase upload commit pattern.
+   *
+   * `archiveKey` is optional — only present for HEIC/HEIF originals.
    *
    * @throws If the server returns a non-2xx status.
    */
@@ -445,6 +533,8 @@ export default function PhotoUploadModal({
     filename: string;
     mediaType: "photo" | "video";
     thumbnailKey?: string;
+    /** S3 key for the lossless HEIC original. Absent for non-HEIC uploads. */
+    archiveKey?: string;
   }) {
     const res = await fetch("/api/media/commit", {
       method: "POST",
@@ -477,18 +567,26 @@ export default function PhotoUploadModal({
   /**
    * Handles the complete upload lifecycle for a single file:
    * 1. Generate preview/poster thumbnail.
-   * 2. Request presigned URLs for preview and original.
+   * 2. Request presigned URLs for preview, original, and (for HEIC) archive.
    * 3. PUT preview bytes to S3.
    * 4. PUT original bytes to S3.
-   * 5. Commit the DynamoDB record.
+   * 5. PUT HEIC bytes to S3 (HEIC uploads only).
+   * 6. Commit the DynamoDB record (with archiveKey if applicable).
    *
    * Video poster generation failures are non-fatal — the upload continues
    * without a thumbnail rather than aborting.
+   *
+   * @param file          - The display file (JPEG for HEIC, original otherwise).
+   * @param eventIdValue  - The event ID to associate this upload with.
+   * @param userId        - The authenticated user's Cognito sub.
+   * @param originalFile  - The raw HEIC/HEIF file before conversion. Only
+   *                        provided for HEIC uploads; omit for all other types.
    */
   async function uploadOneFile(
     file: File,
     eventIdValue: string,
-    userId: string
+    userId: string,
+    originalFile?: File
   ) {
     const mediaType: "photo" | "video" =
       isVideoFile(file) || isVideoByExtension(file) ? "video" : "photo";
@@ -546,16 +644,35 @@ export default function PhotoUploadModal({
       thumbnailKey,
     });
 
-    // Upload the file bytes directly to S3 via the presigned URL.
-    await putToS3(originalResp.signedUrl, mimeType, file);
-
-    // Only after S3 confirms the upload do we write the DynamoDB record.
-    // This prevents orphaned metadata records for interrupted uploads.
     const { mediaId, sk, takenAt, filename: safeName, eventId: committedEventId } = originalResp;
     if (!mediaId || !sk || !takenAt || !safeName || !committedEventId) {
       throw new Error("upload-url response missing commit fields");
     }
 
+    // For HEIC originals, request a separate archive URL that shares the same
+    // mediaId so both S3 objects are linked by the same UUID prefix.
+    let archiveKey: string | undefined;
+    if (mediaType === "photo" && originalFile && isHeicOrHeif(originalFile)) {
+      const heicType = originalFile.type || "image/heic";
+      const archiveResp = await requestSignedUrl({
+        filename: originalFile.name,
+        filetype: heicType,
+        userId,
+        eventId: eventIdValue,
+        mediaType,
+        kind: "archive",
+        mediaId,
+      });
+
+      archiveKey = archiveResp.s3Key;
+      await putToS3(archiveResp.signedUrl, heicType, originalFile);
+    }
+
+    // Upload the display file (JPEG) directly to S3 via the presigned URL.
+    await putToS3(originalResp.signedUrl, mimeType, file);
+
+    // Only after all S3 uploads succeed do we write the DynamoDB record.
+    // This prevents orphaned metadata records for interrupted uploads.
     await commitUpload({
       mediaId,
       sk,
@@ -566,6 +683,7 @@ export default function PhotoUploadModal({
       filename: safeName,
       mediaType,
       thumbnailKey,
+      archiveKey,
     });
   }
 
@@ -656,29 +774,57 @@ export default function PhotoUploadModal({
     setPhase("preparing");
 
     try {
-      const processedFiles: File[] = [];
+      const prepJobs = files.map((file, index) => ({ file, index }));
+      const jobs: Job[] = new Array(files.length);
 
-      for (let i = 0; i < files.length; i += 1) {
-        const pf = await preprocessFile(files[i]);
-        processedFiles.push(pf);
-        setPreparedCount(i + 1);
-      }
+      await runWithConcurrency(prepJobs, 4, async ({ file, index }) => {
+        setActivePreparingFiles((prev) => [
+          ...prev,
+          { name: file.name, startedAt: Date.now() },
+        ]);
+        try {
+          const processed = await preprocessFile(file);
 
-      const jobs: Job[] = processedFiles.map((file, index) => ({
-        file,
-        index,
-      }));
+          // Retain the raw file reference for HEIC originals so uploadOneFile can
+          // PUT the lossless HEIC to S3 alongside the converted JPEG.
+          const originalFile =
+            isHeicOrHeif(file) && processed !== file ? file : undefined;
+
+          jobs[index] = { index, file: processed, originalFile };
+          setPreparedCount((c) => c + 1);
+        } catch (err: any) {
+          if (err?.message?.includes("conversion timed out")) {
+            // Skip this file rather than aborting the entire batch.
+            // jobs[index] stays undefined and is filtered out before uploading.
+            setSkippedFiles((prev) => [...prev, file.name]);
+            setPreparedCount((c) => c + 1);
+          } else {
+            throw err;
+          }
+        } finally {
+          setActivePreparingFiles((prev) =>
+            prev.filter((f) => f.name !== file.name)
+          );
+        }
+      });
+
+      // Remove slots that were skipped due to conversion timeout.
+      const uploadJobs = jobs.filter(Boolean);
 
       setPhase("uploading");
 
-      await runWithConcurrency(jobs, 3, async (job) => {
+      await runWithConcurrency(uploadJobs, 3, async (job) => {
         setActiveCount((c) => c + 1);
+        setActiveUploadingNames((prev) => [...prev, job.file.name]);
 
         try {
-          await uploadOneFile(job.file, eventId, user.sub);
+          await uploadOneFile(job.file, eventId, user.sub, job.originalFile);
           setCompletedCount((c) => c + 1);
         } finally {
           setActiveCount((c) => Math.max(0, c - 1));
+          setActiveUploadingNames((prev) =>
+            prev.filter((n) => n !== job.file.name)
+          );
         }
       });
 
@@ -689,6 +835,18 @@ export default function PhotoUploadModal({
       setNewEvent("");
 
       onUploadSuccess();
+
+      // Warn about any HEIC files that timed out and were skipped.
+      // Read skippedFiles via a ref snapshot so we don't need it in deps.
+      const skipped = jobs
+        .map((_, i) => (jobs[i] ? null : prepJobs[i]?.file.name))
+        .filter(Boolean) as string[];
+      if (skipped.length > 0) {
+        alert(
+          `${skipped.length} HEIC file${skipped.length === 1 ? "" : "s"} couldn't be converted in time and were skipped:\n\n${skipped.slice(0, 5).join("\n")}${skipped.length > 5 ? `\n…and ${skipped.length - 5} more` : ""}`
+        );
+      }
+
       onClose();
     } catch (err) {
       console.error(err);
@@ -699,6 +857,9 @@ export default function PhotoUploadModal({
       setPreparedCount(0);
       setCompletedCount(0);
       setActiveCount(0);
+      setActivePreparingFiles([]);
+      setActiveUploadingNames([]);
+      setSkippedFiles([]);
     }
   };
 
@@ -717,8 +878,7 @@ export default function PhotoUploadModal({
             <button
               type="button"
               onClick={onClose}
-              disabled={uploading}
-              className="rounded-xl border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-900 transition disabled:opacity-60"
+              className="rounded-xl border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-900 transition"
             >
               Close
             </button>
@@ -842,6 +1002,51 @@ export default function PhotoUploadModal({
                   </div>
                 </div>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setShowDetails((v) => !v)}
+                className="mt-3 text-[11px] text-neutral-500 hover:text-neutral-300 transition"
+              >
+                {showDetails ? "Hide details" : "Show details"}
+              </button>
+
+              {showDetails && (() => {
+                if (phase === "preparing") {
+                  return activePreparingFiles.length > 0 ? (
+                    <div className="mt-2 max-h-24 overflow-y-auto space-y-0.5">
+                      {activePreparingFiles.map(({ name, startedAt }) => {
+                        const secs = Math.floor((Date.now() - startedAt) / 1000);
+                        const elapsed =
+                          secs >= 60
+                            ? `${Math.floor(secs / 60)}m ${secs % 60}s`
+                            : `${secs}s`;
+                        return (
+                          <div
+                            key={name}
+                            className="truncate font-mono text-[11px] text-neutral-400"
+                          >
+                            Converting {name}{" "}
+                            <span className="text-neutral-500">· {elapsed}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null;
+                }
+                return activeUploadingNames.length > 0 ? (
+                  <div className="mt-2 max-h-24 overflow-y-auto space-y-0.5">
+                    {activeUploadingNames.map((name) => (
+                      <div
+                        key={name}
+                        className="truncate font-mono text-[11px] text-neutral-400"
+                      >
+                        Uploading {name}
+                      </div>
+                    ))}
+                  </div>
+                ) : null;
+              })()}
             </div>
           ) : null}
 

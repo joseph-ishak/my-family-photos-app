@@ -38,6 +38,7 @@ import PhotoEditorModal from "@/app/components/family-photos/PhotoEditorModal";
 import EmptyState, { EmptyStateIcon } from "@/app/components/ui/EmptyState";
 import { useAuthUser } from "../../../hooks/useAuthUser";
 import { usePhotosFeed } from "../../../hooks/usePhotoFeed";
+import { bulkDownloadPhotos } from "@/lib/download";
 
 import type { Photo } from "../../../hooks/usePhotoFeed";
 
@@ -143,6 +144,17 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
     );
   }
 
+  /** Photos currently selected — derived once for bulk operations. */
+  const selectedPhotos = filteredPhotos.filter((p) => selectedKeys.includes(p.key));
+
+  /**
+   * Downloads all selected photos. Prefers HEIC originals (`archiveKey`) when
+   * present; falls back to the full-resolution display file (`s3Key`).
+   */
+  async function handleDownloadSelected() {
+    await bulkDownloadPhotos(selectedPhotos);
+  }
+
   const canEditEditing =
     !!editingPhoto && !!user?.sub && editingPhoto.ownerUserId === user.sub;
 
@@ -205,6 +217,8 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
         onSelectAll={() => setSelectedKeys(filteredPhotos.map((p) => p.key))}
         onClearSelection={() => setSelectedKeys([])}
         onDeleteSelected={bulkDelete}
+        onDownloadSelected={handleDownloadSelected}
+        hasOriginals={selectedPhotos.some((p) => !!p.archiveKey)}
       />
 
       {!isEmpty && (

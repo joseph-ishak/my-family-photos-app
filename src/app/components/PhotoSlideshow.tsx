@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Photo } from "../../types/photo";
+import { downloadPhoto } from "@/lib/download";
 
 type Props = {
   photos: Photo[];
@@ -369,6 +370,18 @@ export default function PhotoSlideshow({ photos, openPhoto, onClose, loadMore, h
                 Play
               </>
             )}
+          </button>
+
+          {/* Download original */}
+          <button
+            onClick={() => downloadPhoto(photo).catch(console.error)}
+            aria-label={photo.archiveKey ? "Download original (HEIC)" : "Download"}
+            title={photo.archiveKey ? "Download original (HEIC)" : "Download"}
+            className="rounded-full p-2 text-white/70 hover:text-white hover:bg-white/10 transition"
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v13m0 0-4-4m4 4 4-4M3 20h18" />
+            </svg>
           </button>
 
           {/* Fullscreen */}

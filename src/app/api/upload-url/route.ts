@@ -34,10 +34,12 @@ function isValidMediaType(value: unknown): value is "photo" | "video" {
 
 /**
  * Type guard that checks whether a value is a valid upload kind.
- * `"original"` = user-captured file; `"preview"` = server-generated thumbnail.
+ * - `"original"` — user-captured display file (JPEG for HEIC, raw otherwise).
+ * - `"preview"`  — server-generated 480 px thumbnail.
+ * - `"archive"`  — original HEIC/HEIF stored at full quality under `originals/`.
  */
-function isValidKind(value: unknown): value is "original" | "preview" {
-  return value === "original" || value === "preview";
+function isValidKind(value: unknown): value is "original" | "preview" | "archive" {
+  return value === "original" || value === "preview" || value === "archive";
 }
 
 export const POST = withErrorHandler("POST /api/upload-url", async (req: NextRequest) => {
@@ -59,7 +61,7 @@ export const POST = withErrorHandler("POST /api/upload-url", async (req: NextReq
     : "photo";
 
   const kindRaw = body?.kind;
-  const kind: "original" | "preview" = isValidKind(kindRaw)
+  const kind: "original" | "preview" | "archive" = isValidKind(kindRaw)
     ? kindRaw
     : "original";
 
@@ -76,7 +78,11 @@ export const POST = withErrorHandler("POST /api/upload-url", async (req: NextReq
 
   const eventName = String(eventIdRaw ?? "default").trim() || "default";
 
-  const mediaId = uuidv4();
+  // For archive uploads, reuse the mediaId from the original request so both
+  // S3 keys share the same UUID (e.g. uploads/photos/{id}_IMG.jpg and
+  // originals/photos/{id}_IMG.HEIC). Fall back to a fresh UUID otherwise.
+  const clientMediaId = typeof body?.mediaId === "string" ? body.mediaId.trim() : "";
+  const mediaId = kind === "archive" && clientMediaId ? clientMediaId : uuidv4();
   const uploadedAt = new Date().toISOString();
 
   // Validate and normalize client-supplied takenAt to a valid ISO8601 string.
@@ -94,7 +100,8 @@ export const POST = withErrorHandler("POST /api/upload-url", async (req: NextReq
 
   const bucket = requireBucket();
 
-  const basePrefix = kind === "preview" ? "previews" : "uploads";
+  const basePrefix =
+    kind === "preview" ? "previews" : kind === "archive" ? "originals" : "uploads";
   const typePrefix = mediaType === "video" ? "videos" : "photos";
   const s3Key = `${basePrefix}/${typePrefix}/${mediaId}_${safeName}`;
 
@@ -109,7 +116,9 @@ export const POST = withErrorHandler("POST /api/upload-url", async (req: NextReq
 
   const signedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
 
-  if (kind === "preview") {
+  // Preview and archive uploads don't need a commit step — the commit request
+  // for the original will reference the preview/archive keys directly.
+  if (kind === "preview" || kind === "archive") {
     return NextResponse.json({ signedUrl, s3Key, mediaType, kind });
   }
 

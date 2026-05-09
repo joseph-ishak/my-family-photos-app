@@ -9,6 +9,10 @@ type Props = {
   onSelectAll: () => void;
   onClearSelection: () => void;
   onDeleteSelected: () => void | Promise<void>;
+  /** Called when the user clicks "Download Originals". Receives the count so it can show progress. */
+  onDownloadSelected: () => void | Promise<void>;
+  /** Whether any of the selected photos have an archiveKey (HEIC original). */
+  hasOriginals: boolean;
 };
 
 const XIcon = () => (
@@ -41,6 +45,18 @@ const CheckAllIcon = () => (
   </svg>
 );
 
+const DownloadIcon = () => (
+  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
+    <path
+      d="M12 3v13m0 0-4-4m4 4 4-4M3 20h18"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 const TrashIcon = () => (
   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
     <path
@@ -67,15 +83,35 @@ export default function BulkActionsBar({
   onSelectAll,
   onClearSelection,
   onDeleteSelected,
+  onDownloadSelected,
+  hasOriginals,
 }: Props) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   const allSelected = useMemo(() => {
     return totalCount > 0 && selectedCount === totalCount;
   }, [totalCount, selectedCount]);
 
   const showBar = totalCount > 0 && selectedCount > 0;
+
+  /**
+   * Triggers the bulk download. Guards against double-clicks with the local
+   * `downloading` flag and re-enables the button when done.
+   */
+  async function handleDownload() {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await onDownloadSelected();
+    } catch (err) {
+      console.error("Download Selected error", err);
+      alert("Download failed. See console.");
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   /**
    * Called when the user confirms the delete action in the modal. Guards
@@ -147,6 +183,25 @@ export default function BulkActionsBar({
                 >
                   <CheckAllIcon />
                   {allSelected ? "Clear" : "Select all"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleDownload();
+                  }}
+                  disabled={downloading}
+                  className="inline-flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-sm hover:bg-neutral-900 transition disabled:opacity-50"
+                  title={hasOriginals ? "Download originals (HEIC where available)" : "Download selected"}
+                >
+                  <DownloadIcon />
+                  {downloading
+                    ? "Downloading…"
+                    : hasOriginals
+                    ? "Download Originals"
+                    : "Download"}
                 </button>
 
                 <button

@@ -32,4 +32,10 @@ export type Photo = {
   thumbnailKey?: string;
   /** CDN URL for the compressed preview. Prefer this over `url` for thumbnails. */
   thumbnailUrl?: string;
+  /**
+   * S3 key for the original HEIC/HEIF file, stored under `originals/`.
+   * Only present on photos that were originally uploaded as HEIC.
+   * Enables a future "Download Original" feature to retrieve the lossless source.
+   */
+  archiveKey?: string;
 };

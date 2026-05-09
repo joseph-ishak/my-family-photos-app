@@ -1,6 +1,7 @@
 "use client";
 
 import type { Photo } from "../../../types/photo";
+import { downloadPhoto } from "@/lib/download";
 
 type Props = {
   photo: Photo;
@@ -89,6 +90,19 @@ const EditIcon = () => (
   </svg>
 );
 
+/** Inline SVG download icon used on the download action button. */
+const DownloadIcon = () => (
+  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
+    <path
+      d="M12 3v13m0 0-4-4m4 4 4-4M3 20h18"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 /** Inline SVG play icon overlaid on video thumbnails. */
 const PlayIcon = () => (
   <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none">
@@ -169,6 +183,12 @@ export default function PhotoCard({
               alt="Family photo"
               className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
               loading="lazy"
+              onError={(e) => {
+                // CDN thumbnail unavailable (ORB block, missing key, etc.) —
+                // fall back to the presigned S3 URL so the card still renders.
+                const img = e.currentTarget;
+                if (photo.url && img.src !== photo.url) img.src = photo.url;
+              }}
             />
           )}
 
@@ -265,6 +285,16 @@ export default function PhotoCard({
           title={video ? "Edit not available for video" : "Edit"}
         >
           <EditIcon />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => downloadPhoto(photo).catch(console.error)}
+          className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-neutral-950/60 text-white backdrop-blur transition hover:bg-neutral-900"
+          aria-label={photo.archiveKey ? "Download original (HEIC)" : "Download"}
+          title={photo.archiveKey ? "Download original (HEIC)" : "Download"}
+        >
+          <DownloadIcon />
         </button>
       </div>
     </div>

@@ -18,6 +18,130 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+/**
+ * Password policy rules that must all pass before the new-password form can be
+ * submitted. These mirror the Cognito user pool password policy — update here
+ * if the pool policy changes.
+ */
+const PASSWORD_RULES = [
+  {
+    id: "minLength",
+    label: "At least 8 characters",
+    test: (p: string) => p.length >= 8,
+  },
+  {
+    id: "uppercase",
+    label: "One uppercase letter (A–Z)",
+    test: (p: string) => /[A-Z]/.test(p),
+  },
+  {
+    id: "lowercase",
+    label: "One lowercase letter (a–z)",
+    test: (p: string) => /[a-z]/.test(p),
+  },
+  {
+    id: "number",
+    label: "One number (0–9)",
+    test: (p: string) => /[0-9]/.test(p),
+  },
+  {
+    id: "symbol",
+    label: "One special character (!@#$…)",
+    test: (p: string) => /[^A-Za-z0-9]/.test(p),
+  },
+] as const;
+
+/**
+ * Password input with an inline eye-toggle button. Clicking the button
+ * switches between `type="password"` (hidden) and `type="text"` (visible).
+ */
+function PasswordInput({
+  value,
+  onChange,
+  placeholder,
+  disabled,
+  show,
+  onToggleShow,
+  inputRef,
+  autoFocus,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  disabled?: boolean;
+  show: boolean;
+  onToggleShow: () => void;
+  inputRef?: React.Ref<HTMLInputElement>;
+  autoFocus?: boolean;
+}) {
+  return (
+    <div className="relative">
+      <input
+        ref={inputRef}
+        type={show ? "text" : "password"}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        autoFocus={autoFocus}
+        className="h-11 w-full rounded-2xl border border-white/10 bg-neutral-950 pl-4 pr-11 text-sm"
+      />
+      <button
+        type="button"
+        onClick={onToggleShow}
+        disabled={disabled}
+        tabIndex={-1}
+        aria-label={show ? "Hide password" : "Show password"}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/70 transition disabled:pointer-events-none"
+      >
+        <EyeIcon open={show} />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Inline checklist that shows each password rule with a live pass/fail
+ * indicator as the user types. Untouched rules (empty password) render as
+ * neutral grey; typed rules turn green (pass) or red (fail).
+ */
+function PasswordRulesList({ password }: { password: string }) {
+  const touched = password.length > 0;
+  return (
+    <ul className="space-y-1.5 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+      {PASSWORD_RULES.map((rule) => {
+        const pass = rule.test(password);
+        return (
+          <li key={rule.id} className="flex items-center gap-2.5 text-xs">
+            <span
+              className={
+                !touched
+                  ? "text-white/30"
+                  : pass
+                  ? "text-emerald-400"
+                  : "text-red-400"
+              }
+            >
+              {!touched ? "○" : pass ? "✓" : "✗"}
+            </span>
+            <span
+              className={
+                !touched
+                  ? "text-white/40"
+                  : pass
+                  ? "text-white/70"
+                  : "text-white/60"
+              }
+            >
+              {rule.label}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /** Eye icon for the password visibility toggle. `open` = password is visible. */
 const EyeIcon = ({ open }: { open: boolean }) =>
   open ? (
@@ -103,7 +227,11 @@ export default function LoginPage() {
     if (mode === "login") {
       if (!u) return false;
       if (!password) return false;
-      if (needsNewPassword && !newPassword) return false;
+      if (needsNewPassword) {
+        if (!newPassword) return false;
+        // Block submission until every policy rule passes.
+        if (!PASSWORD_RULES.every((r) => r.test(newPassword))) return false;
+      }
       return true;
     }
 
@@ -116,6 +244,7 @@ export default function LoginPage() {
       if (!u) return false;
       if (!resetCode.trim()) return false;
       if (!resetPassword) return false;
+      if (!PASSWORD_RULES.every((r) => r.test(resetPassword))) return false;
       return true;
     }
 
@@ -285,14 +414,35 @@ export default function LoginPage() {
           />
 
           {mode === "login" && (
-            <input
-              type={showPassword ? "text" : "password"}
+            <PasswordInput
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
               placeholder="Password"
               disabled={loading}
-              className="h-11 w-full rounded-2xl border border-white/10 bg-neutral-950 px-4 text-sm"
+              show={showPassword}
+              onToggleShow={() => setShowPassword((v) => !v)}
             />
+          )}
+
+          {mode === "login" && needsNewPassword && (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <p className="text-xs text-white/50 px-1">
+                  Choose a new password to replace the temporary one.
+                </p>
+                <PasswordInput
+                  inputRef={firstFieldRef}
+                  value={newPassword}
+                  onChange={setNewPassword}
+                  placeholder="New password"
+                  disabled={loading}
+                  show={showNewPassword}
+                  onToggleShow={() => setShowNewPassword((v) => !v)}
+                  autoFocus
+                />
+              </div>
+              <PasswordRulesList password={newPassword} />
+            </div>
           )}
 
           {mode === "forgotConfirm" && (
@@ -305,14 +455,15 @@ export default function LoginPage() {
                 className="h-11 w-full rounded-2xl border border-white/10 bg-neutral-950 px-4 text-sm"
               />
 
-              <input
-                type={showResetPassword ? "text" : "password"}
+              <PasswordInput
                 value={resetPassword}
-                onChange={(e) => setResetPassword(e.target.value)}
+                onChange={setResetPassword}
                 placeholder="New password"
                 disabled={loading}
-                className="h-11 w-full rounded-2xl border border-white/10 bg-neutral-950 px-4 text-sm"
+                show={showResetPassword}
+                onToggleShow={() => setShowResetPassword((v) => !v)}
               />
+              <PasswordRulesList password={resetPassword} />
             </>
           )}
 

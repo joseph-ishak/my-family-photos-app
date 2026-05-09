@@ -19,6 +19,12 @@ export interface MediaRecord {
   uploadedAt: string;
   s3Key: string;
   thumbnailKey?: string;
+  /**
+   * S3 key for the original HEIC/HEIF file preserved before JPEG conversion.
+   * Only present on photos that were originally uploaded as HEIC.
+   * Stored under the `originals/` prefix (e.g. `originals/photos/{id}_IMG.HEIC`).
+   */
+  archiveKey?: string;
   mimeType: string;
   filename: string;
   s3Bucket?: string;

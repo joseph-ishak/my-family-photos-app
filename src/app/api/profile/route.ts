@@ -71,14 +71,15 @@ export const GET = withErrorHandler("GET /api/profile", async (req: NextRequest)
   let profile = result.Item;
 
   if (!profile) {
-    profile = {
+    // username, firstName, lastName are intentionally omitted from the skeleton
+    // record. DynamoDB's GSI2 uses `username` as a key attribute and rejects
+    // empty strings as key values. Omitting the attribute is safe — the item
+    // simply won't appear in GSI2 until the user saves a real username via PUT.
+    const skeleton: Record<string, unknown> = {
       PK: pk,
       SK: sk,
       entityType: "PROFILE",
       nickname: defaultNickname(user),
-      username: "",
-      firstName: "",
-      lastName: "",
       avatarKey: null,
       profileComplete: false,
       createdAt: now(),
@@ -88,10 +89,12 @@ export const GET = withErrorHandler("GET /api/profile", async (req: NextRequest)
     await ddb.send(
       new PutCommand({
         TableName: process.env.DYNAMO_TABLE_NAME!,
-        Item: profile,
+        Item: skeleton,
         ConditionExpression: "attribute_not_exists(PK)",
       })
     );
+
+    profile = skeleton;
   }
 
   const complete = isProfileComplete(profile);
@@ -112,7 +115,16 @@ export const GET = withErrorHandler("GET /api/profile", async (req: NextRequest)
   }
 
   return NextResponse.json({
-    profile: { ...profile, avatarUrl, profileComplete: complete },
+    profile: {
+      ...profile,
+      // Default empty-string fields for new users whose skeleton record was
+      // written without these attributes (see comment above).
+      username: profile.username ?? "",
+      firstName: profile.firstName ?? "",
+      lastName: profile.lastName ?? "",
+      avatarUrl,
+      profileComplete: complete,
+    },
   });
 });
 

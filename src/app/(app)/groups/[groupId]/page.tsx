@@ -226,6 +226,9 @@ export default function GroupDetailsPage() {
   const [userResults, setUserResults] = useState<UserLite[]>([]);
   const [userSearching, setUserSearching] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  /** Full list of users returned from the API, cached after the first fetch. */
+  const [allUsers, setAllUsers] = useState<UserLite[]>([]);
+  const [allUsersFetched, setAllUsersFetched] = useState(false);
 
   const myRole = group?.role ?? "member";
   const canManage = canManageMembers(myRole);
@@ -358,44 +361,58 @@ export default function GroupDetailsPage() {
     refresh();
   }, [groupId]);
 
+  /**
+   * Fetches the full user list once and caches it in `allUsers`. Subsequent
+   * calls are no-ops. All filtering is done client-side so searches match
+   * across first name, last name, nickname, and username without being
+   * constrained by the GSI2 `begins_with` prefix at the DB level.
+   */
+  async function loadAllUsers() {
+    if (allUsersFetched || !canManage) return;
+    setUserSearching(true);
+    try {
+      const r = await fetch("/api/users?limit=50", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!r.ok) return;
+      const d = await r.json().catch(() => null);
+      setAllUsers(Array.isArray(d?.users) ? d.users : []);
+      setAllUsersFetched(true);
+    } catch {
+      // silently ignore — the input is still usable
+    } finally {
+      setUserSearching(false);
+    }
+  }
+
+  /**
+   * Keeps `userResults` and `pickerOpen` in sync whenever the query, the
+   * cached user list, or the current member set changes. Filtering is done
+   * entirely in memory so every field (name, nickname, username) is searched.
+   */
   useEffect(() => {
     if (!canManage) return;
+    const q = userQuery.trim().toLowerCase();
+    // Exclude people who are already members of this group.
+    const available = allUsers.filter((u) => !memberIds.has(u.userId));
 
-    const q = userQuery.trim();
     if (!q) {
-      setUserResults([]);
-      setPickerOpen(false);
+      setUserResults(available);
+      setPickerOpen(allUsersFetched && available.length > 0);
       return;
     }
 
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      setUserSearching(true);
-      try {
-        const r = await fetch(
-          `/api/users?query=${encodeURIComponent(q)}&limit=10`,
-          { credentials: "include", cache: "no-store" }
-        );
-
-        if (!r.ok) return;
-
-        const d = await r.json().catch(() => null);
-        if (cancelled) return;
-
-        const users: UserLite[] = Array.isArray(d?.users) ? d.users : [];
-        const filtered = users.filter((u) => !memberIds.has(u.userId));
-        setUserResults(filtered);
-        setPickerOpen(true);
-      } finally {
-        if (!cancelled) setUserSearching(false);
-      }
-    }, 200);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [userQuery, canManage, memberIds]);
+    const matched = available.filter((u) => {
+      const hay = [u.firstName, u.lastName, u.nickname, u.username]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+    setUserResults(matched);
+    setPickerOpen(true);
+  }, [userQuery, canManage, memberIds, allUsers, allUsersFetched]);
 
   /** Submits the rename form via `PUT /api/groups/:groupId` and refreshes. */
   const doRename = async () => {
@@ -668,12 +685,17 @@ export default function GroupDetailsPage() {
                   setError(null);
                 }}
                 onFocus={() => {
-                  if (userResults.length) setPickerOpen(true);
+                  if (!allUsersFetched) {
+                    loadAllUsers();
+                  } else {
+                    // Re-open the picker if there are results to show.
+                    setPickerOpen(userResults.length > 0);
+                  }
                 }}
                 onBlur={() => {
                   setTimeout(() => setPickerOpen(false), 150);
                 }}
-                placeholder="Start typing a name"
+                placeholder="Search by name or username"
                 className="w-full rounded-2xl border border-neutral-800 bg-neutral-900/40 px-4 py-3 text-sm text-neutral-100 outline-none focus:border-neutral-600"
                 disabled={adding}
               />
