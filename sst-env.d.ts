@@ -18,6 +18,14 @@ declare module "sst" {
       "type": "sst.aws.Router"
       "url": string
     }
+    "ProcessHeic": {
+      "name": string
+      "type": "sst.aws.Function"
+    }
+    "ProcessVideo": {
+      "name": string
+      "type": "sst.aws.Function"
+    }
     "Site": {
       "type": "sst.aws.Nextjs"
       "url": string

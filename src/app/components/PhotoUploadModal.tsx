@@ -5,22 +5,20 @@
  *
  * ## Upload flow
  * 1. **File selection** — the user picks one or more image/video files.
- * 2. **HEIC conversion** — HEIC/HEIF images are converted to JPEG client-side
- *    via `heic2any` at 95 % quality before anything is sent to S3. The original
- *    HEIC file reference is retained in memory for archival.
- * 3. **Preview generation** — for photos a thumbnail JPEG is generated via
- *    Canvas (max 1200 px); for videos a poster frame is captured from early in
- *    the clip (5 % of duration, capped at 0.2 s).
- * 4. **Presigned-URL request** — calls `POST /api/upload-url` for the preview
- *    (kind=`"preview"`), the display JPEG (kind=`"original"`), and — for HEIC
- *    files — the lossless HEIC archive (kind=`"archive"`).
- * 5. **S3 PUT** — preview, original, and (for HEIC) archive bytes are PUT
- *    directly to S3.
- * 6. **DynamoDB commit** — only after the S3 PUTs succeed does the component
- *    call `POST /api/media/commit` to write the metadata record, preventing
- *    orphaned DB entries for incomplete uploads.
- * 7. **Archive key** — for HEIC originals, the `archiveKey` is included in the
- *    commit payload so it is stored alongside `s3Key` and `thumbnailKey`.
+ * 2. **HEIC/HEIF** — raw file is uploaded directly to S3 under `incoming/`
+ *    and processed by the **ProcessHeic Lambda** (Sharp, native C++ codec).
+ *    No client-side conversion. The modal polls `GET /api/media/status` until
+ *    the Lambda commits the DynamoDB record.
+ * 3. **Non-HEIC preparation** — JPEG/PNG images pass through unchanged;
+ *    non-HEIC conversions (none currently) use `normalizeImage`.
+ * 4. **Preview generation** — for non-HEIC photos a thumbnail JPEG is
+ *    generated via Canvas (max 1200 px); for videos a poster frame is captured.
+ * 5. **Presigned-URL request** — calls `POST /api/upload-url` for the preview
+ *    (kind=`"preview"`), the display file (kind=`"original"`), and for HEIC
+ *    the incoming slot (kind=`"incoming"`).
+ * 6. **S3 PUT** — bytes are PUT directly to S3 via presigned URLs.
+ * 7. **DynamoDB commit** — non-HEIC files call `POST /api/media/commit` after
+ *    S3. HEIC files are committed by the Lambda after conversion.
  *
  * Files are uploaded with concurrency-3 parallelism. Two progress bars track
  * "preparing" (HEIC conversion + preview generation) and "uploading" (S3 PUTs)
@@ -55,14 +53,18 @@ type Props = {
 type Job = {
   /** Index in the original file list — used for progress tracking. */
   index: number;
-  /** The (possibly pre-processed) file to upload (JPEG for HEIC originals). */
+  /** The (possibly pre-processed) file to upload. */
   file: File;
   /**
    * The raw original file before HEIC→JPEG conversion.
-   * Only present for HEIC/HEIF uploads; `undefined` for all other file types.
-   * Used to PUT the lossless HEIC to S3 alongside the display JPEG.
+   * Only present for the legacy client-side HEIC path; `undefined` otherwise.
    */
   originalFile?: File;
+  /**
+   * When true, this file is uploaded raw to `incoming/` and converted by the
+   * ProcessHeic Lambda rather than being converted client-side.
+   */
+  viaLambda: boolean;
 };
 
 /** Returns `true` if the file's MIME type indicates a video. */
@@ -329,8 +331,11 @@ export default function PhotoUploadModal({
   const [activeCount, setActiveCount] = useState(0);
 
   const [phase, setPhase] = useState<
-    "idle" | "preparing" | "uploading" | "finishing"
+    "idle" | "preparing" | "uploading" | "processing" | "finishing"
   >("idle");
+
+  const [processingTotal, setProcessingTotal] = useState(0);
+  const [processingDone, setProcessingDone] = useState(0);
 
   const [showDetails, setShowDetails] = useState(false);
   const [activePreparingFiles, setActivePreparingFiles] = useState<
@@ -368,6 +373,8 @@ export default function PhotoUploadModal({
     setActivePreparingFiles([]);
     setActiveUploadingNames([]);
     setSkippedFiles([]);
+    setProcessingTotal(0);
+    setProcessingDone(0);
   }, [open]);
 
   useEffect(() => {
@@ -463,9 +470,10 @@ export default function PhotoUploadModal({
    * images; all other files (video, JPEG, PNG, etc.) pass through unchanged.
    */
   async function preprocessFile(file: File): Promise<File> {
-    // isImageFile checks file.type, which is empty ("") for HEIC on Firefox and
-    // Chrome — always fall through to normalizeImage for HEIC/HEIF regardless.
-    if (isImageFile(file) || isHeicOrHeif(file)) return normalizeImage(file);
+    // HEIC/HEIF files are uploaded raw and converted by the ProcessHeic Lambda —
+    // no client-side conversion needed.
+    if (isHeicOrHeif(file)) return file;
+    if (isImageFile(file)) return normalizeImage(file);
     return file;
   }
 
@@ -487,7 +495,7 @@ export default function PhotoUploadModal({
     userId: string;
     eventId: string;
     mediaType: "photo" | "video";
-    kind: "preview" | "original" | "archive";
+    kind: "preview" | "original" | "archive" | "incoming";
     thumbnailKey?: string;
     /** Pass the mediaId from the original response when kind === "archive". */
     mediaId?: string;
@@ -576,18 +584,62 @@ export default function PhotoUploadModal({
    * Video poster generation failures are non-fatal — the upload continues
    * without a thumbnail rather than aborting.
    *
-   * @param file          - The display file (JPEG for HEIC, original otherwise).
+   * @param file          - The display file (or raw HEIC when viaLambda).
    * @param eventIdValue  - The event ID to associate this upload with.
    * @param userId        - The authenticated user's Cognito sub.
-   * @param originalFile  - The raw HEIC/HEIF file before conversion. Only
-   *                        provided for HEIC uploads; omit for all other types.
+   * @param originalFile  - The raw HEIC/HEIF file (legacy client-side path only).
+   * @param viaLambda     - When true, upload raw HEIC to incoming/ and invoke Lambda.
+   * @returns `{ pk, sk }` for Lambda jobs (used to poll for completion), else void.
    */
   async function uploadOneFile(
     file: File,
     eventIdValue: string,
     userId: string,
-    originalFile?: File
-  ) {
+    originalFile: File | undefined,
+    viaLambda: boolean
+  ): Promise<{ pk: string; sk: string } | undefined> {
+    // Lambda path: upload raw file to incoming/, fire Lambda, return poll tokens.
+    if (viaLambda) {
+      const isVideo = isVideoFile(file) || isVideoByExtension(file);
+      const fileType = isVideo
+        ? (file.type || "video/quicktime")
+        : (file.type || "image/heic");
+      const processEndpoint = isVideo ? "/api/media/process-video" : "/api/media/process";
+
+      const incomingResp = await requestSignedUrl({
+        filename: file.name,
+        filetype: fileType,
+        userId,
+        eventId: eventIdValue,
+        mediaType: isVideo ? "video" : "photo",
+        kind: "incoming",
+      });
+
+      const { mediaId, sk, takenAt, filename: safeName, eventId: committedEventId } = incomingResp;
+      if (!mediaId || !sk || !takenAt || !safeName || !committedEventId) {
+        throw new Error("upload-url response missing commit fields for incoming file");
+      }
+
+      await putToS3(incomingResp.signedUrl, fileType, file);
+
+      const processRes = await fetch(processEndpoint, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mediaId,
+          sk,
+          incomingKey: incomingResp.s3Key,
+          eventId: committedEventId,
+          takenAt,
+          filename: safeName,
+        }),
+      });
+      if (!processRes.ok) throw new Error(`process failed: ${processRes.status}`);
+
+      return { pk: `EVENT#${committedEventId}`, sk };
+    }
+
     const mediaType: "photo" | "video" =
       isVideoFile(file) || isVideoByExtension(file) ? "video" : "photo";
 
@@ -697,10 +749,10 @@ export default function PhotoUploadModal({
    * @param concurrency - Maximum number of simultaneous uploads.
    * @param worker      - Async function to execute for each job.
    */
-  async function runWithConcurrency(
-    jobs: Job[],
+  async function runWithConcurrency<T>(
+    jobs: T[],
     concurrency: number,
-    worker: (job: Job) => Promise<void>
+    worker: (job: T) => Promise<void>
   ) {
     let next = 0;
     let firstError: unknown = null;
@@ -774,7 +826,7 @@ export default function PhotoUploadModal({
     setPhase("preparing");
 
     try {
-      const prepJobs = files.map((file, index) => ({ file, index }));
+      const prepJobs: { file: File; index: number }[] = files.map((file, index) => ({ file, index }));
       const jobs: Job[] = new Array(files.length);
 
       await runWithConcurrency(prepJobs, 4, async ({ file, index }) => {
@@ -790,7 +842,12 @@ export default function PhotoUploadModal({
           const originalFile =
             isHeicOrHeif(file) && processed !== file ? file : undefined;
 
-          jobs[index] = { index, file: processed, originalFile };
+          jobs[index] = {
+            index,
+            file: processed,
+            originalFile,
+            viaLambda: isHeicOrHeif(file) || isVideoFile(file) || isVideoByExtension(file),
+          };
           setPreparedCount((c) => c + 1);
         } catch (err: any) {
           if (err?.message?.includes("conversion timed out")) {
@@ -813,12 +870,21 @@ export default function PhotoUploadModal({
 
       setPhase("uploading");
 
+      const pendingLambdaJobs: { pk: string; sk: string }[] = [];
+
       await runWithConcurrency(uploadJobs, 3, async (job) => {
         setActiveCount((c) => c + 1);
         setActiveUploadingNames((prev) => [...prev, job.file.name]);
 
         try {
-          await uploadOneFile(job.file, eventId, user.sub, job.originalFile);
+          const lambdaResult = await uploadOneFile(
+            job.file,
+            eventId,
+            user.sub,
+            job.originalFile,
+            job.viaLambda
+          );
+          if (lambdaResult) pendingLambdaJobs.push(lambdaResult);
           setCompletedCount((c) => c + 1);
         } finally {
           setActiveCount((c) => Math.max(0, c - 1));
@@ -827,6 +893,37 @@ export default function PhotoUploadModal({
           );
         }
       });
+
+      // Poll until all Lambda-processed HEIC files are committed to DynamoDB.
+      if (pendingLambdaJobs.length > 0) {
+        setPhase("processing");
+        setProcessingTotal(pendingLambdaJobs.length);
+        let pending = [...pendingLambdaJobs];
+
+        while (pending.length > 0) {
+          await new Promise((r) => setTimeout(r, 2500));
+          const checks = await Promise.all(
+            pending.map(({ pk, sk }) =>
+              fetch("/api/media/status", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ pk, sk }),
+              })
+                .then((r) => r.json())
+                .then((d) => ({ pk, sk, done: Boolean(d.exists) }))
+            )
+          );
+          for (const item of checks) {
+            if (item.done) {
+              pending = pending.filter(
+                (p) => !(p.pk === item.pk && p.sk === item.sk)
+              );
+              setProcessingDone((c) => c + 1);
+            }
+          }
+        }
+      }
 
       setPhase("finishing");
 
@@ -860,6 +957,8 @@ export default function PhotoUploadModal({
       setActivePreparingFiles([]);
       setActiveUploadingNames([]);
       setSkippedFiles([]);
+      setProcessingTotal(0);
+      setProcessingDone(0);
     }
   };
 
@@ -942,111 +1041,154 @@ export default function PhotoUploadModal({
 
           {uploading ? (
             <div className="rounded-3xl border border-neutral-800 bg-neutral-900/30 p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-neutral-100">
-                    {phase === "preparing"
-                      ? "Preparing files"
-                      : phase === "uploading"
-                      ? "Uploading files"
-                      : phase === "finishing"
-                      ? "Finishing"
-                      : "Working"}
+              {phase === "processing" ? (
+                <>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-neutral-100">
+                        Converting files
+                      </div>
+                      <div className="mt-1 text-xs text-neutral-400">
+                        Lambda converting on server · much faster than browser
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-2xl font-semibold tabular-nums">
+                        {processingTotal > 0
+                          ? `${Math.round((processingDone / processingTotal) * 100)}%`
+                          : "0%"}
+                      </div>
+                      <div className="text-[11px] text-neutral-400 tabular-nums">
+                        Processing
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-1 text-xs text-neutral-400">
-                    {totalFiles ? `${totalFiles} total` : ""}
-                    {activeCount ? ` • ${activeCount} active` : ""}
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between text-[11px] text-neutral-400">
+                      <span>Converting</span>
+                      <span className="tabular-nums">
+                        {processingDone}/{processingTotal}
+                      </span>
+                    </div>
+                    <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-neutral-800">
+                      <div
+                        className="h-full rounded-full bg-emerald-400 transition-[width] duration-300 ease-out"
+                        style={{
+                          width: `${processingTotal > 0 ? (processingDone / processingTotal) * 100 : 0}%`,
+                        }}
+                      />
+                    </div>
                   </div>
-                </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-neutral-100">
+                        {phase === "preparing"
+                          ? "Preparing files"
+                          : phase === "uploading"
+                          ? "Uploading files"
+                          : phase === "finishing"
+                          ? "Finishing"
+                          : "Working"}
+                      </div>
+                      <div className="mt-1 text-xs text-neutral-400">
+                        {totalFiles ? `${totalFiles} total` : ""}
+                        {activeCount ? ` • ${activeCount} active` : ""}
+                      </div>
+                    </div>
 
-                <div className="shrink-0 text-right">
-                  <div className="text-2xl font-semibold tabular-nums">
-                    {phase === "preparing"
-                      ? `${preparingProgress}%`
-                      : `${uploadingProgress}%`}
+                    <div className="shrink-0 text-right">
+                      <div className="text-2xl font-semibold tabular-nums">
+                        {phase === "preparing"
+                          ? `${preparingProgress}%`
+                          : `${uploadingProgress}%`}
+                      </div>
+                      <div className="text-[11px] text-neutral-400 tabular-nums">
+                        {phase === "preparing" ? "Preparing" : "Uploading"}
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-[11px] text-neutral-400 tabular-nums">
-                    {phase === "preparing" ? "Preparing" : "Uploading"}
-                  </div>
-                </div>
-              </div>
 
-              <div className="mt-4 space-y-4">
-                <div>
-                  <div className="flex items-center justify-between text-[11px] text-neutral-400">
-                    <span>Preparing</span>
-                    <span className="tabular-nums">
-                      {preparedCount}/{totalFiles}
-                    </span>
-                  </div>
-                  <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-neutral-800">
-                    <div
-                      className="h-full rounded-full bg-neutral-200 transition-[width] duration-300 ease-out"
-                      style={{ width: `${preparingProgress}%` }}
-                    />
-                  </div>
-                </div>
+                  <div className="mt-4 space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between text-[11px] text-neutral-400">
+                        <span>Preparing</span>
+                        <span className="tabular-nums">
+                          {preparedCount}/{totalFiles}
+                        </span>
+                      </div>
+                      <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-neutral-800">
+                        <div
+                          className="h-full rounded-full bg-neutral-200 transition-[width] duration-300 ease-out"
+                          style={{ width: `${preparingProgress}%` }}
+                        />
+                      </div>
+                    </div>
 
-                <div>
-                  <div className="flex items-center justify-between text-[11px] text-neutral-400">
-                    <span>Uploading</span>
-                    <span className="tabular-nums">
-                      {completedCount}/{totalFiles}
-                    </span>
+                    <div>
+                      <div className="flex items-center justify-between text-[11px] text-neutral-400">
+                        <span>Uploading</span>
+                        <span className="tabular-nums">
+                          {completedCount}/{totalFiles}
+                        </span>
+                      </div>
+                      <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-neutral-800">
+                        <div
+                          className="h-full rounded-full bg-white transition-[width] duration-300 ease-out"
+                          style={{ width: `${uploadingProgress}%` }}
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-neutral-800">
-                    <div
-                      className="h-full rounded-full bg-white transition-[width] duration-300 ease-out"
-                      style={{ width: `${uploadingProgress}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
 
-              <button
-                type="button"
-                onClick={() => setShowDetails((v) => !v)}
-                className="mt-3 text-[11px] text-neutral-500 hover:text-neutral-300 transition"
-              >
-                {showDetails ? "Hide details" : "Show details"}
-              </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDetails((v) => !v)}
+                    className="mt-3 text-[11px] text-neutral-500 hover:text-neutral-300 transition"
+                  >
+                    {showDetails ? "Hide details" : "Show details"}
+                  </button>
 
-              {showDetails && (() => {
-                if (phase === "preparing") {
-                  return activePreparingFiles.length > 0 ? (
-                    <div className="mt-2 max-h-24 overflow-y-auto space-y-0.5">
-                      {activePreparingFiles.map(({ name, startedAt }) => {
-                        const secs = Math.floor((Date.now() - startedAt) / 1000);
-                        const elapsed =
-                          secs >= 60
-                            ? `${Math.floor(secs / 60)}m ${secs % 60}s`
-                            : `${secs}s`;
-                        return (
+                  {showDetails && (() => {
+                    if (phase === "preparing") {
+                      return activePreparingFiles.length > 0 ? (
+                        <div className="mt-2 max-h-24 overflow-y-auto space-y-0.5">
+                          {activePreparingFiles.map(({ name, startedAt }) => {
+                            const secs = Math.floor((Date.now() - startedAt) / 1000);
+                            const elapsed =
+                              secs >= 60
+                                ? `${Math.floor(secs / 60)}m ${secs % 60}s`
+                                : `${secs}s`;
+                            return (
+                              <div
+                                key={name}
+                                className="truncate font-mono text-[11px] text-neutral-400"
+                              >
+                                Converting {name}{" "}
+                                <span className="text-neutral-500">· {elapsed}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null;
+                    }
+                    return activeUploadingNames.length > 0 ? (
+                      <div className="mt-2 max-h-24 overflow-y-auto space-y-0.5">
+                        {activeUploadingNames.map((name) => (
                           <div
                             key={name}
                             className="truncate font-mono text-[11px] text-neutral-400"
                           >
-                            Converting {name}{" "}
-                            <span className="text-neutral-500">· {elapsed}</span>
+                            Uploading {name}
                           </div>
-                        );
-                      })}
-                    </div>
-                  ) : null;
-                }
-                return activeUploadingNames.length > 0 ? (
-                  <div className="mt-2 max-h-24 overflow-y-auto space-y-0.5">
-                    {activeUploadingNames.map((name) => (
-                      <div
-                        key={name}
-                        className="truncate font-mono text-[11px] text-neutral-400"
-                      >
-                        Uploading {name}
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                ) : null;
-              })()}
+                    ) : null;
+                  })()}
+                </>
+              )}
             </div>
           ) : null}
 

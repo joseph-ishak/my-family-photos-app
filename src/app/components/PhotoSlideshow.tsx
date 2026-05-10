@@ -423,6 +423,7 @@ export default function PhotoSlideshow({ photos, openPhoto, onClose, loadMore, h
             controls
             autoPlay
             playsInline
+            crossOrigin="anonymous"
             className="max-h-full max-w-full object-contain"
           />
         ) : (

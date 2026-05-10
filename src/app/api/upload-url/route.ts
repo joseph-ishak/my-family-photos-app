@@ -37,9 +37,10 @@ function isValidMediaType(value: unknown): value is "photo" | "video" {
  * - `"original"` — user-captured display file (JPEG for HEIC, raw otherwise).
  * - `"preview"`  — server-generated 480 px thumbnail.
  * - `"archive"`  — original HEIC/HEIF stored at full quality under `originals/`.
+ * - `"incoming"` — raw HEIC awaiting Lambda conversion; stored under `incoming/`.
  */
-function isValidKind(value: unknown): value is "original" | "preview" | "archive" {
-  return value === "original" || value === "preview" || value === "archive";
+function isValidKind(value: unknown): value is "original" | "preview" | "archive" | "incoming" {
+  return value === "original" || value === "preview" || value === "archive" || value === "incoming";
 }
 
 export const POST = withErrorHandler("POST /api/upload-url", async (req: NextRequest) => {
@@ -61,7 +62,7 @@ export const POST = withErrorHandler("POST /api/upload-url", async (req: NextReq
     : "photo";
 
   const kindRaw = body?.kind;
-  const kind: "original" | "preview" | "archive" = isValidKind(kindRaw)
+  const kind: "original" | "preview" | "archive" | "incoming" = isValidKind(kindRaw)
     ? kindRaw
     : "original";
 
@@ -101,7 +102,13 @@ export const POST = withErrorHandler("POST /api/upload-url", async (req: NextReq
   const bucket = requireBucket();
 
   const basePrefix =
-    kind === "preview" ? "previews" : kind === "archive" ? "originals" : "uploads";
+    kind === "preview"
+      ? "previews"
+      : kind === "archive"
+      ? "originals"
+      : kind === "incoming"
+      ? "incoming"
+      : "uploads";
   const typePrefix = mediaType === "video" ? "videos" : "photos";
   const s3Key = `${basePrefix}/${typePrefix}/${mediaId}_${safeName}`;
 
@@ -118,6 +125,8 @@ export const POST = withErrorHandler("POST /api/upload-url", async (req: NextReq
 
   // Preview and archive uploads don't need a commit step — the commit request
   // for the original will reference the preview/archive keys directly.
+  // Incoming (raw HEIC for Lambda processing) returns the same full metadata as
+  // "original" so the client can pass everything to POST /api/media/process.
   if (kind === "preview" || kind === "archive") {
     return NextResponse.json({ signedUrl, s3Key, mediaType, kind });
   }

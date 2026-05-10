@@ -21,8 +21,15 @@ export const ddb = DynamoDBDocumentClient.from(
   new DynamoDBClient({ region })
 );
 
-/** S3 client used for presigned URLs and object operations. */
-export const s3 = new S3Client({ region });
+/** S3 client used for presigned URLs and object operations.
+ *  responseChecksumValidation "when_required" prevents the SDK from embedding
+ *  x-amz-checksum-mode=ENABLED in presigned GetObject URLs — S3 rejects range
+ *  requests (used for video seeking) when that flag is present. */
+export const s3 = new S3Client({
+  region,
+  requestChecksumCalculation: "WHEN_REQUIRED",
+  responseChecksumValidation: "WHEN_REQUIRED",
+});
 
 /** Cognito client used for all auth operations (login, refresh, forgot-password, etc.). */
 export const cognito = new CognitoIdentityProviderClient({ region });

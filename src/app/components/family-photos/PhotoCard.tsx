@@ -170,6 +170,7 @@ export default function PhotoCard({
                 muted
                 playsInline
                 preload="metadata"
+                crossOrigin="anonymous"
               />
               <div className="absolute inset-0 grid place-items-center">
                 <div className="grid h-10 w-10 place-items-center rounded-full bg-black/55 text-white">

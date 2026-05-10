@@ -39,6 +39,40 @@ export default $config({
 
     const table = sst.aws.Dynamo.get("ExistingPhotosTable", photosTableName);
 
+    const processHeic = new sst.aws.Function("ProcessHeic", {
+      handler: "functions/process-heic.handler",
+      timeout: "5 minutes",
+      memory: "1024 MB",
+      environment: {
+        S3_BUCKET_NAME: uploadsBucketName,
+        DYNAMO_TABLE_NAME: photosTableName,
+      },
+      nodejs: {
+        install: ["sharp", "heic-convert"],
+      },
+      link: [uploads, table],
+    });
+
+    const processVideo = new sst.aws.Function("ProcessVideo", {
+      handler: "functions/process-video.handler",
+      timeout: "15 minutes",
+      memory: "3008 MB",
+      environment: {
+        S3_BUCKET_NAME: uploadsBucketName,
+        DYNAMO_TABLE_NAME: photosTableName,
+      },
+      nodejs: {
+        install: ["ffmpeg-static", "fluent-ffmpeg"],
+      },
+      link: [uploads, table],
+      transform: {
+        function: (args) => {
+          // 5 GB /tmp: input MOV + output MP4 can both be large simultaneously.
+          (args as any).ephemeralStorage = { size: 5120 };
+        },
+      },
+    });
+
     // Allow cross-origin requests to S3 presigned URLs so canvas operations
     // (react-easy-crop, image-edit.ts) can draw images with crossOrigin="anonymous"
     // without throwing a security error.
@@ -47,7 +81,7 @@ export default $config({
       corsRules: [
         {
           allowedHeaders: ["*"],
-          allowedMethods: ["GET", "HEAD"],
+          allowedMethods: ["GET", "HEAD", "PUT"],
           allowedOrigins: ["*"],
           maxAgeSeconds: 86400,
         },
@@ -108,8 +142,46 @@ export default $config({
         // Tells Lambda where to fetch secrets at cold start
         // CURSOR_SECRET and SENTRY_DSN are loaded from Secrets Manager at runtime
         SECRETS_ARN: SECRET_ARN,
+
+        // Function names injected so the API routes can invoke them
+        PROCESS_HEIC_FUNCTION_NAME: processHeic.name,
+        PROCESS_VIDEO_FUNCTION_NAME: processVideo.name,
       },
-      link: [uploads, table, previewsRouter],
+      link: [uploads, table, previewsRouter, processHeic, processVideo],
+    });
+
+    // Grant the Next.js Lambda permission to invoke the ProcessHeic function.
+    new aws.iam.RolePolicy("InvokeProcessHeicPolicy", {
+      role: site.nodes.server.nodes.role.name,
+      policy: processHeic.arn.apply((arn) =>
+        JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Action: ["lambda:InvokeFunction"],
+              Resource: arn,
+            },
+          ],
+        })
+      ),
+    });
+
+    // Grant the Next.js Lambda permission to invoke the ProcessVideo function.
+    new aws.iam.RolePolicy("InvokeProcessVideoPolicy", {
+      role: site.nodes.server.nodes.role.name,
+      policy: processVideo.arn.apply((arn) =>
+        JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Action: ["lambda:InvokeFunction"],
+              Resource: arn,
+            },
+          ],
+        })
+      ),
     });
 
     // Grant the Lambda execution role permission to read the secret
