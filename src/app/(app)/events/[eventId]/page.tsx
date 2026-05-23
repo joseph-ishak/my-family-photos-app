@@ -21,6 +21,8 @@ import { useParams } from "next/navigation";
 import FamilyPhotosPage from "@/app/(app)/family-photos/FamilyPhotosPage";
 import ContentFrame from "@/app/components/shell/ContentFrame";
 import EventShareModal from "@/app/components/events/EventShareModal";
+import { useAuthUser } from "@/hooks/useAuthUser";
+import type { Photo } from "@/types/photo";
 
 /** Shape of a single item in the `/api/events` summaries array. */
 type EventSummary = {
@@ -30,6 +32,7 @@ type EventSummary = {
   updatedAt: string | null;
   photoCount: number;
   coverKey: string | null;
+  ownerUserId: string | null;
 };
 
 /**
@@ -94,6 +97,25 @@ export default function EventDetailPage() {
   const [event, setEvent] = useState<EventSummary | null>(null);
 
   const [shareOpen, setShareOpen] = useState(false);
+
+  const { user } = useAuthUser();
+  const isOwner = !!user?.sub && !!event && event.ownerUserId === user.sub;
+
+  async function handleSetCover(photo: Photo) {
+    const coverKey = photo.thumbnailKey ?? photo.s3Key;
+    if (!coverKey || !eventId) return;
+
+    const res = await fetch(`/api/events/${encodeURIComponent(eventId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ coverKey }),
+    });
+
+    if (res.ok) {
+      setEvent((prev) => prev ? { ...prev, coverKey } : prev);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -209,7 +231,11 @@ export default function EventDetailPage() {
           </div>
         </div>
 
-        <FamilyPhotosPage initialEventFilter={eventId} hideHeader />
+        <FamilyPhotosPage
+          initialEventFilter={eventId}
+          hideHeader
+          onSetCover={isOwner ? handleSetCover : undefined}
+        />
       </div>
     </ContentFrame>
   );

@@ -14,6 +14,10 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Bucket"
     }
+    "MediaConvertComplete": {
+      "name": string
+      "type": "sst.aws.Function"
+    }
     "PreviewsCdn": {
       "type": "sst.aws.Router"
       "url": string
@@ -22,13 +26,13 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Function"
     }
-    "ProcessVideo": {
-      "name": string
-      "type": "sst.aws.Function"
-    }
     "Site": {
       "type": "sst.aws.Nextjs"
       "url": string
+    }
+    "SubmitMediaConvert": {
+      "name": string
+      "type": "sst.aws.Function"
     }
   }
 }

@@ -27,7 +27,21 @@ export const POST = withErrorHandler("POST /api/media/status", async (req: NextR
   if (!pk || !sk) return apiError("pk and sk are required", 400);
 
   const table = requireTable();
-  const result = await ddb.send(new GetCommand({ TableName: table, Key: { PK: pk, SK: sk } }));
+  const result = await ddb.send(
+    new GetCommand({
+      TableName: table,
+      Key: { PK: pk, SK: sk },
+      ProjectionExpression: "mediaId, processingStatus",
+    })
+  );
 
-  return apiOk({ exists: Boolean(result.Item) });
+  const item = result.Item as { processingStatus?: string } | undefined;
+  const exists = Boolean(item);
+  // Absent field → treat as "ready" (backward compat with pre-Phase-3 records).
+  const raw = item?.processingStatus;
+  const processingStatus: "processing" | "ready" | "failed" | null = exists
+    ? (raw === "processing" ? "processing" : raw === "failed" ? "failed" : "ready")
+    : null;
+
+  return apiOk({ exists, processingStatus });
 });

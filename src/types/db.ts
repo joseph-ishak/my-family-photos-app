@@ -28,6 +28,24 @@ export interface MediaRecord {
   mimeType: string;
   filename: string;
   s3Bucket?: string;
+  /**
+   * Lifecycle status of server-side processing (Lambda or MediaConvert).
+   * Absent on older records — treat as `"ready"`.
+   * Set to `"processing"` on early commit; updated to `"ready"` by the completion Lambda,
+   * or `"failed"` if MediaConvert emits an ERROR event.
+   */
+  processingStatus?: "processing" | "ready" | "failed";
+  /**
+   * S3 key of the raw uploaded file in the `incoming/` prefix.
+   * Written at early-commit time and preserved so the retry endpoint can
+   * re-submit a failed MediaConvert job without requiring a re-upload.
+   */
+  incomingKey?: string;
+  /**
+   * S3 key for the HLS manifest (e.g. `hls/{mediaId}/index.m3u8`).
+   * Only present on videos transcoded via MediaConvert with HLS output enabled.
+   */
+  hlsKey?: string;
 }
 
 export interface EventRecord {

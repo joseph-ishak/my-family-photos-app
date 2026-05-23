@@ -11,7 +11,7 @@
  * managing group access without leaving the events list.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import EventsGrid, {
   type EventSummary,
@@ -49,7 +49,7 @@ export default function EventsPage() {
   const [shareEventId, setShareEventId] = useState("");
 
   /** Fetches the latest event summaries and updates local state. */
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setLoading(true);
     try {
       const r = await fetch("/api/events", { credentials: "include" });
@@ -63,11 +63,17 @@ export default function EventsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
+
+  // Refresh when any file finishes uploading in the background queue.
+  useEffect(() => {
+    window.addEventListener("upload:complete", refresh);
+    return () => window.removeEventListener("upload:complete", refresh);
+  }, [refresh]);
 
   const existingEvents = useMemo(
     () => summaries.map((s) => s.eventId),
@@ -106,10 +112,6 @@ export default function EventsPage() {
       <PhotoUploadModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onUploadSuccess={() => {
-          setModalOpen(false);
-          refresh();
-        }}
         existingEvents={existingEvents}
         user={user}
       />

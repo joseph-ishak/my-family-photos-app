@@ -22,6 +22,68 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Photo } from "../../types/photo";
 import { downloadPhoto } from "@/lib/download";
 
+// ── HLS video player ──────────────────────────────────────────────────────────
+
+/**
+ * Video player that prefers HLS for adaptive-bitrate streaming (instant start)
+ * when `hlsUrl` is present, falling back to the presigned `src` URL.
+ *
+ * - On browsers that support HLS natively (Safari): use a plain `<video src>`
+ *   with the HLS manifest URL — no JS library needed.
+ * - On Chrome/Firefox: dynamically load `hls.js` and attach it to the element.
+ * - Without `hlsUrl`: render a regular `<video src={src}>` (legacy MP4 path).
+ *
+ * `hls.js` is imported dynamically so it doesn't bloat the initial bundle.
+ */
+function VideoPlayer({ src, hlsUrl, photoKey }: { src: string; hlsUrl?: string; photoKey: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !hlsUrl) return;
+
+    // Safari has native HLS support — just set the src directly.
+    if (el.canPlayType("application/vnd.apple.mpegurl")) {
+      el.src = hlsUrl;
+      return;
+    }
+
+    // Chrome / Firefox: use hls.js
+    let hlsInstance: any = null;
+    import("hls.js").then(({ default: Hls }) => {
+      if (!videoRef.current) return; // component unmounted
+      if (Hls.isSupported()) {
+        hlsInstance = new Hls({ startLevel: -1 }); // auto quality selection
+        hlsInstance.loadSource(hlsUrl);
+        hlsInstance.attachMedia(videoRef.current);
+      } else {
+        // hls.js not supported and no native HLS — fall back to MP4 src
+        if (videoRef.current) videoRef.current.src = src;
+      }
+    });
+
+    return () => {
+      hlsInstance?.destroy();
+    };
+  // Re-run whenever the video URL changes (navigating between slides).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hlsUrl, src, photoKey]);
+
+  return (
+    <video
+      ref={videoRef}
+      // When hlsUrl is present, src is set imperatively via the effect above.
+      // For legacy MP4 (no hlsUrl), set it declaratively so React manages it.
+      src={hlsUrl ? undefined : src}
+      controls
+      autoPlay
+      playsInline
+      crossOrigin="anonymous"
+      className="max-h-full max-w-full object-contain"
+    />
+  );
+}
+
 type Props = {
   photos: Photo[];
   openPhoto: Photo | null;
@@ -417,14 +479,11 @@ export default function PhotoSlideshow({ photos, openPhoto, onClose, loadMore, h
       {/* ── Media area ── */}
       <div className="relative flex-1 flex items-center justify-center min-h-0 overflow-hidden">
         {video ? (
-          <video
+          <VideoPlayer
             key={photo.key}
+            photoKey={photo.key}
             src={photo.url}
-            controls
-            autoPlay
-            playsInline
-            crossOrigin="anonymous"
-            className="max-h-full max-w-full object-contain"
+            hlsUrl={photo.hlsUrl}
           />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element

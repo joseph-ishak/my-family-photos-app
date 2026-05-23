@@ -38,4 +38,30 @@ export type Photo = {
    * Enables a future "Download Original" feature to retrieve the lossless source.
    */
   archiveKey?: string;
+  /** Stable identifier for the media item — used for queue membership checks. */
+  mediaId?: string;
+  /**
+   * Server-side processing status. Absent or `"ready"` means the media is
+   * fully transcoded and ready to play/view. `"processing"` means a Lambda or
+   * MediaConvert job is still running — the card shows a progress ring.
+   * `"failed"` means the MediaConvert job errored and the user can retry.
+   */
+  processingStatus?: "processing" | "ready" | "failed";
+  /**
+   * S3 key of the raw incoming file — preserved so the retry endpoint can
+   * re-submit a failed MediaConvert job without the user needing to re-upload.
+   */
+  incomingKey?: string;
+  /**
+   * S3 key for the HLS adaptive bitrate manifest. Only present on videos
+   * transcoded via MediaConvert. Prefer this over `s3Key` for playback when
+   * available (enables instant-start via segment streaming).
+   */
+  hlsKey?: string;
+  /**
+   * CDN URL for the HLS master manifest. Derived from `hlsKey` via the
+   * previews CDN. Use this as the `src` for `hls.js` / native HLS playback.
+   * Only present when `hlsKey` is set.
+   */
+  hlsUrl?: string;
 };

@@ -54,6 +54,12 @@ type Props = {
    * embedding inside an event banner that provides its own upload button.
    */
   hideHeader?: boolean;
+  /**
+   * When provided, each photo card shows a "Make Cover Photo" option in its
+   * overflow menu. Only pass this on event detail pages where the viewer is
+   * the event owner.
+   */
+  onSetCover?: (photo: Photo) => void;
 };
 
 /**
@@ -83,7 +89,7 @@ function FamilyPhotosSkeleton() {
  * bulk-actions bar, and the photo grid. Handles the `?upload=1` search param
  * to auto-open the upload modal when navigated from an event detail page.
  */
-function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
+function FamilyPhotosInner({ initialEventFilter, hideHeader, onSetCover }: Props) {
   const { loading, user } = useAuthUser();
 
   const router = useRouter();
@@ -93,6 +99,22 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
   const uploadParam = searchParams.get("upload") === "1";
 
   const [modalOpen, setModalOpen] = useState(false);
+
+  // Refresh the feed whenever a file completes uploading in the background queue.
+  useEffect(() => {
+    function onUploadComplete(e: Event) {
+      const detail = (e as CustomEvent<{ eventId?: string }>).detail;
+      // Refresh if: no event filter (global gallery) OR the completed file belongs
+      // to the event currently being viewed.
+      if (!initialEventFilter || detail.eventId === initialEventFilter) {
+        handleUploadSuccess();
+      }
+    }
+    window.addEventListener("upload:complete", onUploadComplete);
+    return () => window.removeEventListener("upload:complete", onUploadComplete);
+    // handleUploadSuccess is stable from usePhotosFeed, initialEventFilter is prop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialEventFilter]);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingPhoto, setEditingPhoto] = useState<Photo | null>(null);
@@ -172,7 +194,6 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
           setModalOpen(false);
           if (uploadParam) router.replace(pathname);
         }}
-        onUploadSuccess={handleUploadSuccess}
         existingEvents={existingEvents}
         user={user}
         lockedEventId={initialEventFilter}
@@ -287,6 +308,7 @@ function FamilyPhotosInner({ initialEventFilter, hideHeader }: Props) {
               setEditingPhoto(photo);
               setEditorOpen(true);
             }}
+            onSetCover={onSetCover}
           />
 
           <div ref={loaderRef} className="h-10" />

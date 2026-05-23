@@ -53,24 +53,54 @@ export default $config({
       link: [uploads, table],
     });
 
-    const processVideo = new sst.aws.Function("ProcessVideo", {
-      handler: "functions/process-video.handler",
-      timeout: "15 minutes",
-      memory: "3008 MB",
+    // SubmitMediaConvert: tiny Lambda that calls the MediaConvert API (~1 s).
+    // Replaces the old ProcessVideo FFmpeg Lambda (15 min, 3 GB).
+    const submitMediaConvert = new sst.aws.Function("SubmitMediaConvert", {
+      handler: "functions/submit-mediaconvert.handler",
+      timeout: "30 seconds",
+      memory: "256 MB",
       environment: {
-        S3_BUCKET_NAME: uploadsBucketName,
+        S3_BUCKET_NAME:          uploadsBucketName,
+        MEDIACONVERT_ENDPOINT:   process.env.MEDIACONVERT_ENDPOINT!,
+        MEDIACONVERT_ROLE_ARN:   process.env.MEDIACONVERT_ROLE_ARN!,
+      },
+      link: [uploads],
+    });
+
+    // MediaConvertComplete: triggered by EventBridge when the job finishes.
+    // Updates the DynamoDB record written by the early-commit (Phase 3).
+    const mediaConvertComplete = new sst.aws.Function("MediaConvertComplete", {
+      handler: "functions/mediaconvert-complete.handler",
+      timeout: "1 minute",
+      memory: "256 MB",
+      environment: {
+        S3_BUCKET_NAME:    uploadsBucketName,
         DYNAMO_TABLE_NAME: photosTableName,
       },
-      nodejs: {
-        install: ["ffmpeg-static", "fluent-ffmpeg"],
-      },
       link: [uploads, table],
-      transform: {
-        function: (args) => {
-          // 5 GB /tmp: input MOV + output MP4 can both be large simultaneously.
-          (args as any).ephemeralStorage = { size: 5120 };
-        },
-      },
+    });
+
+    // EventBridge rule: fires mediaConvertComplete when any MediaConvert job
+    // in this account/region reaches COMPLETE status.
+    const mcEventRule = new aws.cloudwatch.EventRule("MediaConvertCompleteRule", {
+      description: "Trigger MediaConvertComplete Lambda when a job finishes",
+      eventPattern: JSON.stringify({
+        source: ["aws.mediaconvert"],
+        "detail-type": ["MediaConvert Job State Change"],
+        detail: { status: ["COMPLETE", "ERROR"] },
+      }),
+    });
+
+    new aws.cloudwatch.EventTarget("MediaConvertCompleteTarget", {
+      rule: mcEventRule.name,
+      arn:  mediaConvertComplete.arn,
+    });
+
+    new aws.lambda.Permission("MediaConvertCompletePermission", {
+      action:    "lambda:InvokeFunction",
+      function:  mediaConvertComplete.name,
+      principal: "events.amazonaws.com",
+      sourceArn: mcEventRule.arn,
     });
 
     // Allow cross-origin requests to S3 presigned URLs so canvas operations
@@ -144,10 +174,10 @@ export default $config({
         SECRETS_ARN: SECRET_ARN,
 
         // Function names injected so the API routes can invoke them
-        PROCESS_HEIC_FUNCTION_NAME: processHeic.name,
-        PROCESS_VIDEO_FUNCTION_NAME: processVideo.name,
+        PROCESS_HEIC_FUNCTION_NAME:        processHeic.name,
+        SUBMIT_MEDIACONVERT_FUNCTION_NAME: submitMediaConvert.name,
       },
-      link: [uploads, table, previewsRouter, processHeic, processVideo],
+      link: [uploads, table, previewsRouter, processHeic, submitMediaConvert, mediaConvertComplete],
     });
 
     // Grant the Next.js Lambda permission to invoke the ProcessHeic function.
@@ -167,10 +197,10 @@ export default $config({
       ),
     });
 
-    // Grant the Next.js Lambda permission to invoke the ProcessVideo function.
-    new aws.iam.RolePolicy("InvokeProcessVideoPolicy", {
+    // Grant the Next.js Lambda permission to invoke SubmitMediaConvert.
+    new aws.iam.RolePolicy("InvokeSubmitMediaConvertPolicy", {
       role: site.nodes.server.nodes.role.name,
-      policy: processVideo.arn.apply((arn) =>
+      policy: submitMediaConvert.arn.apply((arn) =>
         JSON.stringify({
           Version: "2012-10-17",
           Statement: [
@@ -182,6 +212,34 @@ export default $config({
           ],
         })
       ),
+    });
+
+    // Grant SubmitMediaConvert permission to call mediaconvert:CreateJob and
+    // iam:PassRole (required to pass the MediaConvert service role to the job).
+    // Note: iam:PassRole does NOT accept "*" as a Resource — AWS requires a
+    // specific role ARN or ARN pattern. We use the known MediaConvert role ARN
+    // from the environment, falling back to a wildcard role pattern that still
+    // restricts PassRole to roles within this account only.
+    const mediaConvertRoleArn =
+      process.env.MEDIACONVERT_ROLE_ARN ||
+      "arn:aws:iam::915209469707:role/FamilyApp-MediaConvert-Role";
+    new aws.iam.RolePolicy("SubmitMediaConvertJobPolicy", {
+      role: submitMediaConvert.nodes.role.name,
+      policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Action: ["mediaconvert:CreateJob", "mediaconvert:DescribeEndpoints"],
+            Resource: "*",
+          },
+          {
+            Effect: "Allow",
+            Action: ["iam:PassRole"],
+            Resource: mediaConvertRoleArn,
+          },
+        ],
+      }),
     });
 
     // Grant the Lambda execution role permission to read the secret

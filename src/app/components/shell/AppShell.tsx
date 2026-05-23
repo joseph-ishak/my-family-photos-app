@@ -15,6 +15,7 @@ import type { ReactNode } from "react";
 import TopBar from "./TopBar";
 import SideNav from "./SideNav";
 import BottomNav from "./BottomNav";
+import UploadTray from "../upload/UploadTray";
 
 /**
  * Provides the top bar, responsive side-nav, and bottom-nav shell around
@@ -38,6 +39,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
       <div className="lg:hidden">
         <BottomNav />
       </div>
+
+      <UploadTray />
     </div>
   );
 }

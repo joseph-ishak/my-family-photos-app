@@ -516,6 +516,52 @@ export function usePhotosFeed({ pageSize = 20, initialEventFilter }: Args) {
   const totalForCurrentEvent: number | null =
     serverEventId ? (photoCountByEvent[serverEventId] ?? null) : null;
 
+  // Keep a ref so the polling interval always sees the latest photos without
+  // causing the interval effect to re-subscribe on every render.
+  const photosRef = useRef<Photo[]>([]);
+  useEffect(() => { photosRef.current = photos; }, [photos]);
+
+  // Poll every 15 s for photos that are still server-side processing.
+  // Only active when at least one photo has processingStatus === "processing".
+  useEffect(() => {
+    const PROCESSING_POLL_MS = 15_000;
+
+    const id = setInterval(async () => {
+      const pending = photosRef.current.filter(
+        (p) => (p.processingStatus === "processing" || p.processingStatus === "failed") && p.pk && p.sk
+      );
+      if (pending.length === 0) return;
+
+      await Promise.all(
+        pending.map(async (p) => {
+          try {
+            const res = await fetch("/api/media/status", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ pk: p.pk, sk: p.sk }),
+            });
+            if (!res.ok) return;
+            const data = await res.json() as { exists: boolean; processingStatus: "processing" | "ready" | "failed" | null };
+            if (data.processingStatus === "ready" || data.processingStatus === "failed") {
+              setPhotos((prev) =>
+                prev.map((photo) =>
+                  photo.key === p.key
+                    ? { ...photo, processingStatus: data.processingStatus as "ready" | "failed" }
+                    : photo
+                )
+              );
+            }
+          } catch {
+            // Swallow — transient errors don't need to surface to the user
+          }
+        })
+      );
+    }, PROCESSING_POLL_MS);
+
+    return () => clearInterval(id);
+  }, []); // Mount-only: reads from photosRef ref, no dependencies needed
+
   return {
     existingEvents,
     totalForCurrentEvent,

@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Photo } from "../../../types/photo";
 import { downloadPhoto } from "@/lib/download";
+import { useUploadQueue } from "@/hooks/useUploadQueue";
 
 type Props = {
   photo: Photo;
@@ -11,6 +13,7 @@ type Props = {
   onOpen: () => void;
   onDelete: () => void;
   onUpdate: () => void;
+  onSetCover?: () => void;
 };
 
 /** Returns `true` if the photo item is a video based on `mediaType` or MIME type. */
@@ -103,12 +106,92 @@ const DownloadIcon = () => (
   </svg>
 );
 
+/** Inline SVG retry/refresh icon shown on failed or stuck processing cards. */
+const RetryIcon = () => (
+  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
+    <path
+      d="M1 4v6h6"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M3.51 15a9 9 0 1 0 .49-6H1"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Inline SVG 3-dots (ellipsis) icon for the overflow menu button. */
+const DotsIcon = () => (
+  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+    <circle cx="5" cy="12" r="1.5" />
+    <circle cx="12" cy="12" r="1.5" />
+    <circle cx="19" cy="12" r="1.5" />
+  </svg>
+);
+
 /** Inline SVG play icon overlaid on video thumbnails. */
 const PlayIcon = () => (
   <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none">
     <path d="M10 8.5v7l6-3.5-6-3.5Z" fill="currentColor" />
   </svg>
 );
+
+/** SVG ring shown centered on a card while server-side processing is running.
+ *
+ * The ring has 3 arc segments mapped to upload stages:
+ *   0 → 33% : file uploaded to S3 (early commit written)
+ *   33→ 66% : queued in Lambda / MediaConvert
+ *   66→100% : transcoding complete
+ *
+ * `segment` (0–3) controls how much of the ring is filled.
+ * At segment 2 (stuck waiting for transcoder) the filled arc pulses.
+ */
+function ProcessingRingOverlay({ segment }: { segment: 0 | 1 | 2 | 3 }) {
+  const size = 48;
+  const stroke = 4;
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const filled = (segment / 3) * circ;
+  const isPulsing = segment === 2;
+
+  return (
+    <div className="absolute inset-0 grid place-items-center pointer-events-none">
+      <svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        style={{ transform: "rotate(-90deg)" }}
+      >
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="rgba(255,255,255,0.15)"
+          strokeWidth={stroke}
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="rgb(163,163,163)"
+          strokeWidth={stroke}
+          strokeDasharray={`${filled} ${circ}`}
+          strokeLinecap="round"
+          style={{ transition: "stroke-dasharray 0.4s ease" }}
+          className={isPulsing ? "animate-pulse" : undefined}
+        />
+      </svg>
+    </div>
+  );
+}
 
 /**
  * Single photo or video card displayed in the gallery grid.
@@ -121,6 +204,8 @@ const PlayIcon = () => (
  * - Edit is disabled for videos (video editing is not yet supported).
  * - The selection checkbox is only shown when `canEdit` is true (i.e. the
  *   viewer is the owner).
+ * - Cards with `processingStatus === "processing"` show a progress ring overlay
+ *   and are not interactive until processing completes.
  */
 export default function PhotoCard({
   photo,
@@ -130,8 +215,53 @@ export default function PhotoCard({
   onOpen,
   onDelete,
   onUpdate,
+  onSetCover,
 }: Props) {
   const video = isVideo(photo);
+  const isProcessing = photo.processingStatus === "processing";
+  const isFailed = photo.processingStatus === "failed";
+
+  const { isMediaIdInQueue, retryMedia } = useUploadQueue();
+
+  // retryPending: set true after a successful retry click so the button hides
+  // immediately (rather than staying visible while MediaConvert runs).
+  // Cleared automatically when processingStatus changes (either to "ready" or
+  // back to "failed" if MediaConvert errors again).
+  const [retryPending, setRetryPending] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => { setRetryPending(false); }, [photo.processingStatus]);
+
+
+  // Show retry when stuck/failed AND not actively being processed in this session
+  // AND we haven't just clicked retry (retryPending).
+  // After a page refresh the queue is empty, so any processing/failed item gets retry.
+  const showRetry =
+    !retryPending &&
+    (isProcessing || isFailed) &&
+    !isMediaIdInQueue(photo.mediaId ?? "");
+
+  async function handleRetry() {
+    if (isRetrying || !photo.pk || !photo.sk || !photo.mediaId) return;
+    setIsRetrying(true);
+    try {
+      await retryMedia({
+        pk: photo.pk,
+        sk: photo.sk,
+        mediaId: photo.mediaId,
+        filename: photo.s3Key?.split("/").pop() ?? photo.sk ?? "video",
+        mediaType: video ? "video" : "photo",
+        eventId: photo.eventId ?? "",
+        takenAt: photo.takenAt,
+      });
+      // retryMedia shows the tray and adds the item to the queue.
+      // isMediaIdInQueue will now return true → showRetry becomes false automatically.
+      setRetryPending(true);
+    } finally {
+      setIsRetrying(false);
+    }
+  }
 
   const thumbSrc = photo.thumbnailUrl || photo.url;
   const dateText = formatDate(photo.takenAt);
@@ -147,50 +277,58 @@ export default function PhotoCard({
     <div
       className={
         "group relative overflow-hidden rounded-2xl border bg-neutral-950/40 shadow-sm transition duration-200 " +
-        "hover:-translate-y-0.5 hover:border-white/15 hover:shadow-lg " +
-        "focus-within:ring-2 focus-within:ring-white/20 " +
-        (isSelected
-          ? "border-white/25 ring-2 ring-white/20"
-          : "border-white/10")
+        (isProcessing || isFailed
+          ? "border-white/10 opacity-75 cursor-default"
+          : "hover:-translate-y-0.5 hover:border-white/15 hover:shadow-lg " +
+            "focus-within:ring-2 focus-within:ring-white/20 " +
+            (isSelected ? "border-white/25 ring-2 ring-white/20" : "border-white/10"))
       }
     >
       <button
         type="button"
-        onClick={onOpen}
-        className="block w-full text-left focus:outline-none"
-        aria-label={video ? "Open video" : "Open photo"}
+        onClick={isProcessing || isFailed ? undefined : onOpen}
+        disabled={isProcessing || isFailed}
+        className="block w-full text-left focus:outline-none disabled:cursor-default"
+        aria-label={isProcessing ? "Processing…" : isFailed ? "Processing failed" : video ? "Open video" : "Open photo"}
       >
         <div className="relative aspect-square w-full bg-neutral-900/40">
           {video ? (
             <>
-              <video
-                src={photo.url}
-                poster={photo.thumbnailUrl}
-                className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
-                muted
-                playsInline
-                preload="metadata"
-                crossOrigin="anonymous"
-              />
-              <div className="absolute inset-0 grid place-items-center">
-                <div className="grid h-10 w-10 place-items-center rounded-full bg-black/55 text-white">
-                  <PlayIcon />
+              {photo.thumbnailUrl ? (
+                <img
+                  src={photo.thumbnailUrl}
+                  alt="Video thumbnail"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="h-full w-full bg-neutral-800" />
+              )}
+              {isProcessing || isFailed ? (
+                <ProcessingRingOverlay segment={isFailed ? 1 : 2} />
+              ) : (
+                <div className="absolute inset-0 grid place-items-center">
+                  <div className="grid h-10 w-10 place-items-center rounded-full bg-black/55 text-white">
+                    <PlayIcon />
+                  </div>
                 </div>
-              </div>
+              )}
             </>
           ) : (
-            <img
-              src={thumbSrc}
-              alt="Family photo"
-              className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
-              loading="lazy"
-              onError={(e) => {
-                // CDN thumbnail unavailable (ORB block, missing key, etc.) —
-                // fall back to the presigned S3 URL so the card still renders.
-                const img = e.currentTarget;
-                if (photo.url && img.src !== photo.url) img.src = photo.url;
-              }}
-            />
+            <>
+              <img
+                src={thumbSrc}
+                alt="Family photo"
+                className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+                loading="lazy"
+                onError={(e) => {
+                  // CDN thumbnail unavailable (ORB block, missing key, etc.) —
+                  // fall back to the presigned S3 URL so the card still renders.
+                  const img = e.currentTarget;
+                  if (photo.url && img.src !== photo.url) img.src = photo.url;
+                }}
+              />
+              {(isProcessing || isFailed) && <ProcessingRingOverlay segment={isFailed ? 1 : 2} />}
+            </>
           )}
 
           {showMeta ? (
@@ -232,7 +370,22 @@ export default function PhotoCard({
         </div>
       </button>
 
-      {canEdit ? (
+      {showRetry && (
+        <div className="absolute inset-x-0 bottom-3 z-10 flex justify-center">
+          <button
+            type="button"
+            onClick={handleRetry}
+            disabled={isRetrying}
+            className="flex items-center gap-1.5 rounded-full border border-white/20 bg-neutral-950/80 px-3 py-1.5 text-xs font-medium text-white backdrop-blur transition hover:bg-neutral-900 disabled:opacity-60"
+            title="Retry processing"
+          >
+            <RetryIcon />
+            {isRetrying ? "Retrying…" : isFailed ? "Retry" : "Retry"}
+          </button>
+        </div>
+      )}
+
+      {canEdit && !isProcessing && !isFailed ? (
         <div className="absolute left-2 top-2 z-10">
           <label
             className={
@@ -254,7 +407,7 @@ export default function PhotoCard({
         </div>
       ) : null}
 
-      <div
+      {!isProcessing && !isFailed && <div
         className={
           "absolute right-2 top-2 z-10 flex gap-2 transition " +
           (showControls
@@ -297,7 +450,40 @@ export default function PhotoCard({
         >
           <DownloadIcon />
         </button>
-      </div>
+
+        {onSetCover ? (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
+              className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-neutral-950/60 text-white backdrop-blur transition hover:bg-neutral-900"
+              aria-label="More options"
+              title="More options"
+            >
+              <DotsIcon />
+            </button>
+
+            {menuOpen ? (
+              <>
+                {/* Transparent overlay — clicking outside the dropdown closes it */}
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
+                />
+                <div className="absolute right-0 top-full mt-1 z-20 min-w-[160px] rounded-2xl border border-white/10 bg-neutral-950 shadow-xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onSetCover(); setMenuOpen(false); }}
+                    className="w-full px-4 py-3 text-left text-sm text-white/90 hover:bg-white/5 transition"
+                  >
+                    Make Cover Photo
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+      </div>}
     </div>
   );
 }

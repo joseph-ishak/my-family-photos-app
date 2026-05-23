@@ -30,6 +30,7 @@ type EventSummary = {
   updatedAt: string | null;
   photoCount: number;
   coverKey: string | null;
+  ownerUserId: string | null;
 };
 
 export const GET = withErrorHandler("GET /api/events", async (req: NextRequest) => {
@@ -120,7 +121,7 @@ export const GET = withErrorHandler("GET /api/events", async (req: NextRequest) 
   const visible = [
     ...mine,
     ...notMine.filter((e) => sharedSet.has(e.eventId)),
-  ].map(({ ownerUserId, ...rest }) => rest);
+  ];
 
   visible.sort((a, b) => a.name.localeCompare(b.name));
 

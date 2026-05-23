@@ -198,7 +198,7 @@ export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) 
         ScanIndexForward: false,
         ExclusiveStartKey,
         ProjectionExpression:
-          "PK, SK, s3Key, thumbnailKey, archiveKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
+          "PK, SK, mediaId, incomingKey, s3Key, thumbnailKey, archiveKey, hlsKey, processingStatus, eventId, takenAt, ownerUserId, mimeType, mediaType",
       })
     );
 
@@ -227,9 +227,14 @@ export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) 
         return {
           key: item.s3Key,
           s3Key: item.s3Key,
+          mediaId: item.mediaId,
+          incomingKey: item.incomingKey,
           thumbnailKey: item.thumbnailKey,
           thumbnailUrl,
           archiveKey: item.archiveKey,
+          hlsKey: item.hlsKey,
+          hlsUrl: item.hlsKey ? previewUrlForKey(item.hlsKey) : undefined,
+          processingStatus: item.processingStatus ?? undefined,
           mimeType: item.mimeType,
           mediaType: inferMediaType(item),
           url,
@@ -271,7 +276,7 @@ export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) 
       ScanIndexForward: false,
       ExclusiveStartKey,
       ProjectionExpression:
-        "PK, SK, GSI1PK, GSI1SK, s3Key, thumbnailKey, archiveKey, eventId, takenAt, ownerUserId, mimeType, mediaType",
+        "PK, SK, GSI1PK, GSI1SK, mediaId, incomingKey, s3Key, thumbnailKey, archiveKey, hlsKey, processingStatus, eventId, takenAt, ownerUserId, mimeType, mediaType",
     })
   ));
 
@@ -327,9 +332,14 @@ export const GET = withErrorHandler("GET /api/photos", async (req: NextRequest) 
       return {
         key: item.s3Key,
         s3Key: item.s3Key,
+        mediaId: item.mediaId,
+        incomingKey: item.incomingKey,
         thumbnailKey: item.thumbnailKey,
         thumbnailUrl,
         archiveKey: item.archiveKey,
+        hlsKey: item.hlsKey,
+        hlsUrl: item.hlsKey ? previewUrlForKey(item.hlsKey) : undefined,
+        processingStatus: item.processingStatus ?? undefined,
         mimeType: item.mimeType,
         mediaType: inferMediaType(item),
         url,

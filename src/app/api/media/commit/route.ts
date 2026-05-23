@@ -34,7 +34,7 @@ export const POST = withErrorHandler("POST /api/media/commit", async (req: NextR
 
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
 
-  const { mediaId, sk, s3Key, eventId, takenAt, mimeType, filename, mediaType, thumbnailKey, archiveKey } = body as {
+  const { mediaId, sk, s3Key, eventId, takenAt, mimeType, filename, mediaType, thumbnailKey, archiveKey, processingStatus, incomingKey } = body as {
     mediaId?: string;
     sk?: string;
     s3Key?: string;
@@ -46,6 +46,18 @@ export const POST = withErrorHandler("POST /api/media/commit", async (req: NextR
     thumbnailKey?: string;
     /** S3 key for the preserved HEIC/HEIF original (optional — only for HEIC uploads). */
     archiveKey?: string;
+    /**
+     * When provided, written to DynamoDB as-is. Pass `"processing"` for an early
+     * commit (file is uploaded but Lambda/MediaConvert hasn't finished yet).
+     * Omit or pass `"ready"` for a fully-processed direct upload.
+     */
+    processingStatus?: "processing" | "ready";
+    /**
+     * S3 key of the raw incoming file (e.g. `incoming/videos/{mediaId}_name.mp4`).
+     * Stored at early-commit time so the retry endpoint can re-submit a failed
+     * MediaConvert job without requiring a re-upload.
+     */
+    incomingKey?: string;
   };
 
   if (!mediaId || !sk || !s3Key || !eventId || !takenAt || !mimeType || !filename) {
@@ -123,6 +135,8 @@ export const POST = withErrorHandler("POST /api/media/commit", async (req: NextR
         ...(archiveKey ? { archiveKey } : {}),
         mimeType,
         filename,
+        ...(processingStatus ? { processingStatus } : {}),
+        ...(incomingKey ? { incomingKey } : {}),
       },
     })
   );

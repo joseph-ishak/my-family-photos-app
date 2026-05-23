@@ -11,6 +11,7 @@ type Props = {
   onOpen: (photo: Photo) => void;
   onDelete: (key: string) => void | Promise<void>;
   onUpdate: (photo: Photo) => void;
+  onSetCover?: (photo: Photo) => void;
 };
 
 /**
@@ -31,6 +32,7 @@ export default function PhotoGrid({
   onOpen,
   onDelete,
   onUpdate,
+  onSetCover,
 }: Props) {
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4">
@@ -50,6 +52,7 @@ export default function PhotoGrid({
               await onDelete(photo.key);
             }}
             onUpdate={() => onUpdate(photo)}
+            onSetCover={onSetCover ? () => onSetCover(photo) : undefined}
           />
         );
       })}
